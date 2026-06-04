@@ -6,15 +6,18 @@ readme = "docs/ARCHITECTURE.md"
 requires-python = ">=3.9"
 dependencies = []  # stdlib only; LLM calls use lazy optional import or env-based HTTP
 
+[project.scripts]
+memory_os = "memory_os.cli:main"
+
 [project.optional-dependencies]
 # When used inside this host project — LLMClientFactory is resolved automatically.
 # When portable — set GEMINI_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY in env.
 dev = ["pytest"]
 
 [build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.backends.legacy:build"
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["memory_os", "memory_os.*"]
