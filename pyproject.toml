@@ -1,0 +1,20 @@
+[project]
+name = "memory_os"
+version = "0.1.0"
+description = "Portable agent Memory OS kernel — graph memory, telemetry, lifecycle, compaction, search."
+readme = "docs/ARCHITECTURE.md"
+requires-python = ">=3.9"
+dependencies = []  # stdlib only; LLM calls use lazy optional import or env-based HTTP
+
+[project.optional-dependencies]
+# When used inside this host project — LLMClientFactory is resolved automatically.
+# When portable — set GEMINI_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY in env.
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["memory_os", "memory_os.*"]

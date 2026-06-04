@@ -1,0 +1,16 @@
+language: Ukrainian
+verbosity: varies from concise (commands, confirmations) to highly detailed (philosophical
+  statements, detailed requirements)
+formatting: prefers structured and human-readable formats for output (e.g., YAML),
+  uses plain text for input
+tone: direct, pragmatic, technically focused, assertive in setting priorities, collaborative
+custom_rules:
+- Output should be informative, token-optimized for agents, and human-readable.
+- User Persona module must be strictly separated from the core knowledge base, influencing
+  only communication style and not strategic development or core principles of the
+  OS.
+- 'Adherence to ''Local-First Computing Philosophy'': prioritize local computation,
+  minimize LLM calls, and ensure rational hardware resource use.'
+- Emphasis on clear directory structure (e.g., core, modules, toolkit) and portability
+  for Memory OS components.
+- System should analyze its logs to generate LLM-driven insights for developer approval.

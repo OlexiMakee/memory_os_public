@@ -1,0 +1,43 @@
+"""
+Generic Context Compiler for Memory OS.
+Compiles local agent rules, workflows, and active memory into a single system prompt string.
+"""
+
+from pathlib import Path
+
+def compile_context(root: Path) -> str:
+    """
+    Compiles generic system context from local files.
+    """
+    sections = []
+    
+    # 1. Agent Rules
+    rules_path = root / "agent_context" / "AGENT_RULES.md"
+    if rules_path.exists():
+        sections.append("## SYSTEM RULES")
+        sections.append(rules_path.read_text(encoding="utf-8").strip())
+        
+    # 2. Workflows
+    workflows_path = root / "agent_context" / "WORKFLOWS.md"
+    if workflows_path.exists():
+        sections.append("## WORKFLOWS")
+        sections.append(workflows_path.read_text(encoding="utf-8").strip())
+        
+    # 3. Active Memory (RAG output)
+    memory_path = root / "agent_context" / "active_memory.yaml"
+    if memory_path.exists():
+        sections.append("## ACTIVE MEMORY CONTEXT")
+        sections.append("```yaml")
+        sections.append(memory_path.read_text(encoding="utf-8").strip())
+        sections.append("```")
+        
+    # 4. Handshake status
+    handshake_path = root / "agent_context" / "HANDSHAKE.md"
+    if handshake_path.exists():
+        sections.append("## AGENT HANDSHAKE")
+        sections.append(handshake_path.read_text(encoding="utf-8").strip())
+        
+    if not sections:
+        return "No Memory OS context files found in agent_context/ directory."
+        
+    return "\n\n".join(sections)
