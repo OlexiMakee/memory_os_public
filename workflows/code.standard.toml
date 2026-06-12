@@ -1,0 +1,16 @@
+id = "code.standard"
+step_min = 9
+step_max = 11
+level_min = 65
+level_max = 80
+model_policy = "strong_cloud"
+tools = ["search_memory", "validate_memory", "repo_index", "symbol_search", "test_runner"]
+verification = ["test_run_required", "dry_run_required"]
+
+[memory_policy]
+max_cards = 15
+max_tokens = 8000
+
+[escalation]
+if_risk_above = 0.6
+escalate_to = "architecture.giant"

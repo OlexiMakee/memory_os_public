@@ -1,7 +1,7 @@
 id = "architecture.giant"
-step_min = 9
+step_min = 12
 step_max = 13
-level_min = 65
+level_min = 81
 level_max = 100
 model_policy = "large_reasoning"
 tools = ["repo_index", "symbol_search", "test_runner", "adr_writer"]

@@ -1,7 +1,7 @@
 id = "code.small"
-step_min = 3
+step_min = 6
 step_max = 8
-level_min = 26
+level_min = 41
 level_max = 64
 model_policy = "codex"
 tools = ["search_memory", "validate_memory"]

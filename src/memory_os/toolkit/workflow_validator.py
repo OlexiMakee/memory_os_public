@@ -60,9 +60,17 @@ def validate_specs(specs: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     specs = list(specs)
     errors: List[str] = []
     warnings: List[str] = []
-    ids = {}
     intervals = []
 
+    # First pass: collect all valid IDs so escalation forward-references resolve correctly.
+    all_ids: Dict[str, str] = {}
+    for spec in specs:
+        wid = str(spec.get("id") or "")
+        path = spec.get("_path", "<unknown>")
+        if wid:
+            all_ids[wid] = path
+
+    ids: Dict[str, str] = {}
     for spec in specs:
         path = spec.get("_path", "<unknown>")
         missing = sorted(REQUIRED_FIELDS - set(spec))
@@ -103,7 +111,7 @@ def validate_specs(specs: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
             errors.append(f"{path}: verification must be an array")
 
         target = ((spec.get("escalation") or {}).get("escalate_to") if isinstance(spec.get("escalation"), dict) else None)
-        if target and target not in ids:
+        if target and target not in all_ids:
             warnings.append(f"{path}: escalation target '{target}' has no local spec")
 
     coverage = _coverage(intervals)
