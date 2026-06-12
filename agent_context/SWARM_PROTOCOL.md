@@ -10,8 +10,14 @@ For complex tasks (Scores 9-12 in `WORKFLOWS.md`), the system transitions from l
 2. **Registration:** Write each subtask into `swarm_backlog.json` (located in the project root or managed via `scripts/swarm_sync.py`).
 3. **Invocation:** DO NOT attempt to run terminal commands manually to invoke agents. Instead, use the deterministic wrapper script:
    ```bash
-   python scripts/swarm_invoke.py --target="claude" --task_id="subtask_123"
+   python scripts/swarm_invoke.py \
+     --target=claude \
+     --task_id=subtask_123 \
+     --prompt="implement X in src/module.py" \
+     --model=sonnet \
+     --workdir=/path/to/repo
    ```
+   `--target` accepts `claude`, `agy`, or `codex`. `--model` and `--workdir` are optional; `--workdir` defaults to the current directory.
 4. **Monitoring:** The Orchestrator can check `swarm_backlog.json` to track task statuses (`pending`, `running`, `completed`, `failed`, `pending_limit`).
 
 ## 2. Worker Invocation via `swarm_invoke.py`

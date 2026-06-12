@@ -1,0 +1,16 @@
+id = "chat.standard"
+step_min = 3
+step_max = 5
+level_min = 19
+level_max = 40
+model_policy = "strong_cloud"
+tools = ["search_memory", "validate_memory", "repo_index"]
+verification = ["schema_check", "test_run_required"]
+
+[memory_policy]
+max_cards = 8
+max_tokens = 3000
+
+[escalation]
+if_uncertainty_above = 0.7
+escalate_to = "architecture.giant"

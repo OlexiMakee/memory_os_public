@@ -8,17 +8,55 @@ import sqlite3
 import time
 import logging
 import signal
+import http.server
+import threading
+import json
 from pathlib import Path
+from typing import Optional
 
 from memory_os.core.config import MemoryOSConfig
 from memory_os.toolkit.transcript_ingestor import TranscriptIngestor
 from memory_os.core.alerts import AlertManager
 from memory_os.toolkit.analyzer import OSPerformanceAnalyzer
 
+class DaemonHttpHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        if self.path == "/status":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            status_data = self.server.daemon.get_status_dict()
+            self.wfile.write(json.dumps(status_data).encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        if self.path == "/sync":
+            self.server.daemon.logger.info("IPC request: Triggering manual sync")
+            self.server.daemon.check_file(force=True)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "sync_triggered"}).encode("utf-8"))
+        elif self.path == "/stop":
+            self.server.daemon.logger.info("IPC request: Shutting down daemon")
+            self.server.daemon.is_running = False
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "stopping"}).encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
 class ScheduleEngine:
     def __init__(self):
         self.tasks = []
-        
+
     def add_task(self, name: str, interval_seconds: float, func):
         self.tasks.append({
             "name": name,
@@ -26,7 +64,7 @@ class ScheduleEngine:
             "func": func,
             "last_run": time.time()
         })
-        
+
     def run_pending(self, logger):
         now = time.time()
         for task in self.tasks:
@@ -46,17 +84,21 @@ class MemoryDaemon:
         self.is_running = True
         self.data_dir = config.root_dir / "data"
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.log_file = self.data_dir / "daemon.log"
         self.pid_file = self.data_dir / "daemon.pid"
-        
+        self.status_file = self.data_dir / "daemon_status.json"
+
         self.alerts = AlertManager(config)
         self._setup_logging()
         self.last_mtime = 0.0
-        
+        self.http_server = None
+
         self.scheduler = ScheduleEngine()
         # Watch transcript every 5 seconds
         self.scheduler.add_task("watch_transcript", 5.0, self.check_file)
+        # Check for auto-compaction every 30 seconds
+        self.scheduler.add_task("auto_compact", 30.0, self.auto_compact)
         # Run telemetry analysis every 6 hours
         self.scheduler.add_task("telemetry_analysis", 6 * 3600, self.run_telemetry_analysis)
         # Run database optimization and vacuum every 24 hours
@@ -71,6 +113,60 @@ class MemoryDaemon:
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
 
+    def get_status_dict(self) -> dict:
+        import json
+        from datetime import datetime
+        status_data = {}
+        if self.status_file.exists():
+            try:
+                status_data = json.loads(self.status_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        status_data.update({
+            "status": "running" if self.is_running else "stopped",
+            "pid": os.getpid(),
+            "last_activity_time": datetime.now().isoformat(timespec="seconds"),
+            "config": {
+                "transcript_path": str(self.transcript_path),
+                "db_path": str(self.config.db_path),
+                "daemon_port": self.config.daemon_port
+            }
+        })
+        return status_data
+
+    def write_status(self, error: Optional[str] = None):
+        import json
+        from datetime import datetime
+        try:
+            status_data = self.get_status_dict()
+            if error is not None:
+                status_data["last_ingestion_error"] = error
+                status_data["last_ingestion_error_time"] = datetime.now().isoformat(timespec="seconds")
+            elif error == "":
+                status_data["last_ingestion_error"] = None
+
+            self.status_file.write_text(json.dumps(status_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            self.logger.error(f"Failed to write daemon status file: {e}")
+
+    def start_ipc_server(self):
+        port = self.config.daemon_port
+        server_address = ("127.0.0.1", port)
+        class CustomHttpServer(http.server.HTTPServer):
+            def __init__(self, addr, handler, daemon):
+                self.daemon = daemon
+                super().__init__(addr, handler)
+
+        try:
+            self.http_server = CustomHttpServer(server_address, DaemonHttpHandler, self)
+            self.logger.info(f"IPC Server listening on http://127.0.0.1:{port}")
+            self.ipc_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
+            self.ipc_thread.start()
+        except Exception as e:
+            self.logger.error(f"Failed to start IPC Server: {e}")
+            self.http_server = None
+
     def write_pid(self):
         self.pid_file.write_text(str(os.getpid()), encoding="utf-8")
 
@@ -82,23 +178,37 @@ class MemoryDaemon:
         self.logger.info(f"Received signal {signum}, shutting down...")
         self.is_running = False
 
-    def check_file(self):
+    def check_file(self, force: bool = False):
         if not self.transcript_path.exists():
             return
 
         current_mtime = os.path.getmtime(self.transcript_path)
-        if self.last_mtime == 0.0:
+        if self.last_mtime == 0.0 and not force:
             # First run, just record the time
             self.last_mtime = current_mtime
             self.logger.info(f"Baseline established for {self.transcript_path.name}")
+            self.write_status()
             return
 
-        if current_mtime > self.last_mtime:
-            self.logger.info(f"Detected changes in {self.transcript_path.name}. Triggering ingestion...")
+        if force or current_mtime > self.last_mtime:
+            self.logger.info(f"Detected changes/force sync in {self.transcript_path.name}. Triggering ingestion...")
             try:
                 ingestor = TranscriptIngestor(self.config)
                 # Defaults to cheap models for background tasks to save cost
                 capsules = ingestor.ingest(self.transcript_path, provider="gemini", model="")
+
+                # Update status
+                from datetime import datetime
+                status_data = {}
+                if self.status_file.exists():
+                    try:
+                        status_data = json.loads(self.status_file.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+                status_data["last_ingestion_time"] = datetime.now().isoformat(timespec="seconds")
+                status_data["last_ingestion_error"] = None
+                self.status_file.write_text(json.dumps(status_data, indent=2), encoding="utf-8")
+
                 if capsules:
                     self.logger.info(f"Successfully extracted {len(capsules)} task capsules.")
                 else:
@@ -106,6 +216,7 @@ class MemoryDaemon:
             except Exception as e:
                 self.logger.error(f"Error during ingestion: {e}", exc_info=True)
                 self.alerts.send_alert("Memory OS Daemon Error", str(e), is_critical=True)
+                self.write_status(error=str(e))
             finally:
                 self.last_mtime = current_mtime
 
@@ -119,6 +230,50 @@ class MemoryDaemon:
             self.logger.info(f"Telemetry analysis skipped: {result.get('reason')}")
         else:
             self.logger.error(f"Telemetry analysis failed: {result.get('reason')}")
+
+    def auto_compact(self):
+        from memory_os.core.budget import BudgetManager
+        from memory_os.modules.compactor import MemoryCompactor
+
+        budget = BudgetManager(self.config)
+        if budget.is_budget_exhausted():
+            self.logger.warning("Auto-compaction skipped: daily token budget is exhausted.")
+            return
+
+        try:
+            compactor = MemoryCompactor(config=self.config)
+            task_capsules_path = self.config.capsules_file
+            events_path = self.config.memory_dir / "events.jsonl"
+
+            if not task_capsules_path.exists():
+                return
+
+            capsules = [c.to_dict() for c in compactor.repository.get_task_capsules()]
+
+            compacted_timestamps = set()
+            if events_path.exists():
+                import json
+                with open(events_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            ev = json.loads(line)
+                            if ev.get("event") == "memory.task_capsules.compacted":
+                                for ts in ev.get("compacted_timestamps", []):
+                                    compacted_timestamps.add(ts)
+                        except Exception:
+                            pass
+
+            uncompacted = [cap for cap in capsules if cap.get("timestamp") not in compacted_timestamps]
+
+            if len(uncompacted) >= 3:
+                self.logger.info(f"Auto-compacting {len(uncompacted)} uncompacted capsules...")
+                estimated_tokens = len(uncompacted) * 2000
+                budget.add_usage(estimated_tokens)
+
+                compactor.compact_capsules(provider="gemini", model="")
+                self.logger.info("Auto-compaction complete.")
+        except Exception as e:
+            self.logger.error(f"Error during auto-compaction: {e}", exc_info=True)
 
     def optimize_database(self):
         """Run VACUUM and ANALYZE on the SQLite database to reclaim space and refresh query planner stats."""
@@ -150,17 +305,30 @@ class MemoryDaemon:
     def run(self):
         signal.signal(signal.SIGINT, self.handle_signal)
         signal.signal(signal.SIGTERM, self.handle_signal)
-        
+
         self.write_pid()
+        self.write_status()
         self.logger.info(f"Daemon started. Scheduler active.")
-        
+        self.start_ipc_server()
+
         try:
             while self.is_running:
                 self.scheduler.run_pending(self.logger)
                 time.sleep(1.0)  # Main loop tick
+                # Periodically update last activity in status
+                self.write_status()
         except Exception as e:
             self.logger.critical(f"Daemon crashed: {e}")
             self.alerts.send_alert("Memory OS Daemon Crash", str(e), is_critical=True)
+            self.write_status(error=f"Crashed: {e}")
         finally:
+            self.logger.info("Daemon stopping...")
+            if self.http_server:
+                self.logger.info("Stopping IPC Server...")
+                self.http_server.shutdown()
+                self.http_server.server_close()
             self.logger.info("Daemon stopped.")
             self.remove_pid()
+            # Update status to stopped
+            self.is_running = False
+            self.write_status()

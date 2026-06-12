@@ -29,6 +29,19 @@ class MemoryOS:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
+    def optimize_db(self) -> None:
+        """Optimize SQLite indexes and reclaim free pages."""
+        conn = self.get_connection()
+        try:
+            for table in ("memories_fts", "graph_nodes_fts"):
+                conn.execute(f"INSERT INTO {table}({table}) VALUES('optimize')")
+            conn.execute("ANALYZE")
+            conn.commit()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("VACUUM")
+        finally:
+            conn.close()
+
     def init_db(self):
         """Initialize telemetry and memories tables if they do not exist."""
         conn = self.get_connection()

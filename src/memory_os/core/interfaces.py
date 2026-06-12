@@ -51,6 +51,11 @@ class IMemoryOSConfig(ABC):
     def db_path(self) -> Path:
         pass
 
+    @property
+    @abstractmethod
+    def daemon_port(self) -> int:
+        pass
+
 
 class IMemoryStorage(ABC):
     """Interface for Memory OS JSONL and JSON storage, separating disk I/O."""

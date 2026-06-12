@@ -27,6 +27,16 @@
 - **Integration**: Refactored `swarm_invoke.py` to use `swarm_sync` for status changes, preventing file corruption.
 - **Verification**: Added `test_swarm_sync()` to [test_auto.py](file:///Users/oleksii/Documents/memory_os/test_auto.py) verifying registration, conflict blocking, and status printing. All tests passed.
 
+## 2026-06-12: Core CLI Stabilization & Happy Path Hardening
+- **Fix**: Resolved interface mismatch in [TranscriptIngestor](file:///Users/oleksii/Documents/memory_os/src/memory_os/toolkit/transcript_ingestor.py) where `.generate()` was called on the LLM provider instead of `.call_llm()`. Added corresponding happy path integration tests using mock LLM stubs.
+- **Feature**: Replaced subprocess execution in the `snapshot` CLI command with native Python execution of `ContextRegistry` in [cli.py](file:///Users/oleksii/Documents/memory_os/src/memory_os/cli.py).
+- **Feature**: Added a new diagnostic tool `memory_os doctor` to audit critical directories, files, database health, API keys, and background process status.
+- **Feature**: Expanded [MemoryValidator](file:///Users/oleksii/Documents/memory_os/src/memory_os/modules/validator.py) to whitelist AST-specific node types (`"file"`, `"class"`, `"function"`, `"module"`) and resolve relative evidence paths using a workspace file cache.
+- **Daemon**: Implemented local state status reporting in [MemoryDaemon](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/daemon.py) which logs uptime, watches configuration, and records last activity or errors to `data/daemon_status.json` without open sockets.
 
-
-
+## 2026-06-12: Daemon HTTP API Server & Auto-Compaction Loop (Phases 8 & 9)
+- **Fix**: Replaced the non-existent `compact_memory.py` subprocess runner in [MemoryCompactor](file:///Users/oleksii/Documents/memory_os/src/memory_os/modules/compactor.py) with native `ContextRegistry` instantiation to build memory snapshots safely.
+- **Feature**: Implemented a localhost HTTP IPC server (`127.0.0.1:22467`) inside the background thread of [MemoryDaemon](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/daemon.py). The server exposes GET `/status`, POST `/sync`, and POST `/stop` endpoints.
+- **Feature**: Updated [cli.py](file:///Users/oleksii/Documents/memory_os/src/memory_os/cli.py) to enable `daemon stop`, `daemon status`, and a new `daemon sync` subcommand to communicate directly with the running daemon process over HTTP.
+- **Feature**: Implemented background Time & Volume Triggered Auto-Compaction inside `MemoryDaemon` that scans for uncompacted capsules, checks the daily token budget using `BudgetManager`, and invokes the LLM compactor when $\ge 3$ uncompacted capsules are found.
+- **Verification**: Extended automated integration test suite in [test_auto.py](file:///Users/oleksii/Documents/memory_os/test_auto.py) with `test_daemon_ipc_server` and `test_daemon_auto_compaction` verifying status, sync, stop, and budget skip rules. All integration tests passed successfully.

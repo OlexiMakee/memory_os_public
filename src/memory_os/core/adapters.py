@@ -55,8 +55,7 @@ class CodebaseDomainAdapter(IDomainAdapter):
                     "dependencies": sorted(set(imports))[:30],
                 })
                 
-                # Routes
-                routes = re.findall(r"@\w+_bp\.route\(['\"]([^'\"]+)['\"](?:,\s*methods=([^\)]*))?\\)", content)
+                routes = re.findall(r"@\w+_bp\.route\(['\"]([^'\"]+)['\"](?:,\s*methods=([^\)]*))?\)", content)
                 if routes:
                     meta["routes"] = [f"{path} {methods or '[GET]'}" for path, methods in routes[:30]]
             except SyntaxError:
