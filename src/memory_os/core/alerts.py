@@ -27,14 +27,6 @@ class AlertManager:
         except Exception as e:
             logger.error(f"Failed to write to alerts.log: {e}")
             
-        # Desktop notification via osascript
-        try:
-            sound = 'sound name "Basso"' if is_critical else 'sound name "Glass"'
-            # Escape quotes safely for applescript
-            safe_title = title.replace('"', '\\"')
-            safe_message = message.replace('"', '\\"')
-            script = f'display notification "{safe_message}" with title "{safe_title}" {sound}'
-            subprocess.run(["osascript", "-e", script], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception as e:
-            logger.error(f"Failed to send osascript notification: {e}")
+        # Desktop notifications via osascript disabled as per user instruction.
+        pass
 

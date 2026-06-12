@@ -4,6 +4,7 @@ Monitors transcript logs and automatically triggers memory ingestion.
 """
 
 import os
+import sqlite3
 import time
 import logging
 import signal
@@ -12,6 +13,7 @@ from pathlib import Path
 from memory_os.core.config import MemoryOSConfig
 from memory_os.toolkit.transcript_ingestor import TranscriptIngestor
 from memory_os.core.alerts import AlertManager
+from memory_os.toolkit.analyzer import OSPerformanceAnalyzer
 
 class ScheduleEngine:
     def __init__(self):
@@ -55,8 +57,10 @@ class MemoryDaemon:
         self.scheduler = ScheduleEngine()
         # Watch transcript every 5 seconds
         self.scheduler.add_task("watch_transcript", 5.0, self.check_file)
-        # We can add sync or compact tasks here (e.g., every 12 hours)
-        # self.scheduler.add_task("sync_memory", 12 * 3600, self.sync_memory)
+        # Run telemetry analysis every 6 hours
+        self.scheduler.add_task("telemetry_analysis", 6 * 3600, self.run_telemetry_analysis)
+        # Run database optimization and vacuum every 24 hours
+        self.scheduler.add_task("db_optimize", 24 * 3600, self.optimize_database)
 
     def _setup_logging(self):
         self.logger = logging.getLogger("MemoryDaemon")
@@ -104,6 +108,44 @@ class MemoryDaemon:
                 self.alerts.send_alert("Memory OS Daemon Error", str(e), is_critical=True)
             finally:
                 self.last_mtime = current_mtime
+
+    def run_telemetry_analysis(self):
+        analyzer = OSPerformanceAnalyzer(self.config)
+        result = analyzer.generate_insights()
+        status = result.get("status")
+        if status == "success":
+            self.logger.info(f"Telemetry analysis complete: {result.get('created_proposals', 0)} new proposals written.")
+        elif status == "skipped":
+            self.logger.info(f"Telemetry analysis skipped: {result.get('reason')}")
+        else:
+            self.logger.error(f"Telemetry analysis failed: {result.get('reason')}")
+
+    def optimize_database(self):
+        """Run VACUUM and ANALYZE on the SQLite database to reclaim space and refresh query planner stats."""
+        db_path = self.config.db_path
+        if not db_path.exists():
+            self.logger.info("Database does not exist yet; skipping optimization.")
+            return
+
+        size_before = db_path.stat().st_size
+        try:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                # Checkpoint WAL file before vacuuming so VACUUM can reclaim all free pages
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.execute("VACUUM")
+                conn.execute("ANALYZE")
+            finally:
+                conn.close()
+            size_after = db_path.stat().st_size
+            reclaimed = size_before - size_after
+            self.logger.info(
+                f"Database optimization complete: {size_before} -> {size_after} bytes "
+                f"({reclaimed:+d} bytes reclaimed)."
+            )
+        except Exception as e:
+            self.logger.error(f"Database optimization failed: {e}", exc_info=True)
+            self.alerts.send_alert("Memory OS DB Optimization Error", str(e), is_critical=False)
 
     def run(self):
         signal.signal(signal.SIGINT, self.handle_signal)
