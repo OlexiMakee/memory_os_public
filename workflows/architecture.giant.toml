@@ -1,0 +1,16 @@
+id = "architecture.giant"
+step_min = 9
+step_max = 13
+level_min = 65
+level_max = 100
+model_policy = "large_reasoning"
+tools = ["repo_index", "symbol_search", "test_runner", "adr_writer"]
+verification = ["dry_run_required", "user_approval_required"]
+
+[memory_policy]
+root_files = ["AGENTS.md", "INDEX.md", "README.md"]
+graph_depth = 3
+require_evidence = true
+
+[output]
+format = "adr_proposal"

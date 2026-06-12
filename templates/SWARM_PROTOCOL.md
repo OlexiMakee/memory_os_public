@@ -11,8 +11,14 @@ For complex tasks (Scores 9-12 in `WORKFLOWS.md`), the active agent becomes the
 2. **Registration**: Write each subtask into `swarm_backlog.json`.
 3. **Invocation**: Use the wrapper script — never invoke agents manually via terminal:
    ```bash
-   python scripts/swarm_invoke.py --target="claude" --task_id="subtask_123"
+   python scripts/swarm_invoke.py \
+     --target=claude \
+     --task_id=subtask_123 \
+     --prompt="implement X in src/module.py" \
+     --model=sonnet \
+     --workdir=/path/to/repo
    ```
+   `--target` accepts `claude`, `agy`, or `codex`. `--model` and `--workdir` are optional; `--workdir` defaults to the current directory.
 4. **Monitoring**: Track statuses in `swarm_backlog.json`:
    `pending` → `running` → `completed` / `failed` / `pending_limit`
 

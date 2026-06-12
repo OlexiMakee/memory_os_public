@@ -1,0 +1,16 @@
+id = "chat.nano"
+step_min = 0
+step_max = 2
+level_min = 1
+level_max = 18
+model_policy = "cheap_free"
+tools = ["search_memory"]
+verification = ["schema_check"]
+
+[memory_policy]
+max_cards = 3
+max_tokens = 1200
+
+[escalation]
+if_uncertainty_above = 0.6
+escalate_to = "chat.standard"

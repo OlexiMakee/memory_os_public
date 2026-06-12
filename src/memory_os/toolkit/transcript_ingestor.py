@@ -15,7 +15,7 @@ from memory_os.core.prompt_formatter import wrap_in_xml
 from memory_os.core.budget import BudgetManager
 from memory_os.core.alerts import AlertManager
 
-PROMPT_TEMPLATE = """
+SYSTEM_PROMPT = """
 You are a Memory OS agent observing a developer's AI IDE session transcript.
 Your job is to identify what tasks were completely resolved in this session and extract them into a JSON array of task capsules.
 
@@ -30,9 +30,11 @@ A task capsule must look like this:
 
 Read the transcript provided below. Focus only on the actual implementation steps that were explicitly completed.
 Output ONLY valid JSON containing a list of task capsules. If no tasks were completed, output an empty list [].
+"""
 
+USER_TEMPLATE = """
 <transcript>
-{{TRANSCRIPT}}
+{transcript}
 </transcript>
 """
 
@@ -79,16 +81,17 @@ class TranscriptIngestor:
         if not transcript_text:
             return []
             
-        prompt = PROMPT_TEMPLATE.replace("{{TRANSCRIPT}}", transcript_text)
+        user_message = USER_TEMPLATE.format(transcript=transcript_text)
         
         # Estimate token cost (rough heuristic: 1 token = 4 chars)
-        estimated_cost = len(prompt) // 4
+        estimated_cost = (len(SYSTEM_PROMPT) + len(user_message)) // 4
         self.budget.add_usage(estimated_cost)
         
-        result_text = self.llm.generate(
-            prompt=prompt,
-            provider_override=provider,
-            model_override=model
+        result_text = self.llm.call_llm(
+            user_message=user_message,
+            system_prompt=SYSTEM_PROMPT,
+            provider=provider,
+            model=model
         )
         
         try:

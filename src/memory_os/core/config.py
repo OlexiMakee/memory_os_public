@@ -94,3 +94,7 @@ class MemoryOSConfig(IMemoryOSConfig):
     def db_path(self) -> Path:
         val = self.data.get("db_path", "memory/memory_os.db")
         return (self.root_dir / val).resolve()
+
+    @property
+    def daemon_port(self) -> int:
+        return self.data.get("daemon_port", 22467)

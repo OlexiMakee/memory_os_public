@@ -28,7 +28,8 @@ from memory_os.core.storage import FileSystemMemoryStorage
 # ---------------------------------------------------------------------------
 
 VALID_NODE_TYPES: Set[str] = {
-    "rule", "fact", "variable", "connector", "config", "policy", "module_cluster"
+    "rule", "fact", "variable", "connector", "config", "policy", "module_cluster",
+    "file", "class", "function", "module"
 }
 VALID_EDGE_TYPES: Set[str] = {
     "depends_on", "triggers", "refutes", "overrides", "configures", "secures", "contains"
@@ -202,6 +203,28 @@ class MemoryValidator:
     def _is_non_empty_string(self, value: object) -> bool:
         return isinstance(value, str) and bool(value.strip())
 
+    def _find_evidence_file(self, item: str) -> bool:
+        if not hasattr(self, "_all_project_files"):
+            basenames = set()
+            excluded = {".git", ".venv", "venv", "venv_auto", "node_modules", "__pycache__", ".pytest_cache", "data"}
+            for p in self.config.root_dir.rglob("*"):
+                if p.is_file():
+                    try:
+                        parts = p.relative_to(self.config.root_dir).parts
+                    except ValueError:
+                        parts = p.parts
+                    if not any(x in excluded for x in parts):
+                        basenames.add(p.name)
+            self._all_project_files = basenames
+
+        if self.storage.exists(self.config.root_dir / item):
+            return True
+
+        if "/" not in item and "\\" not in item:
+            return item in self._all_project_files
+
+        return False
+
     def validate_nodes(self) -> List[str]:
         nodes_file = self.config.memory_dir / "nodes.jsonl"
         errors: List[str] = []
@@ -249,11 +272,11 @@ class MemoryValidator:
 
             if not isinstance(node["evidence"], list):
                 errors.append(f"nodes.jsonl:L{line_num} evidence field must be a list")
-            else:
+            elif node["type"] != "module":
                 for item in node["evidence"]:
                     if not isinstance(item, str):
                         errors.append(f"nodes.jsonl:L{line_num} evidence items must be strings")
-                    elif not item.startswith("http") and not self.storage.exists(self.config.root_dir / item):
+                    elif not item.startswith("http") and not self._find_evidence_file(item):
                         errors.append(f"nodes.jsonl:L{line_num} evidence file not found: {item}")
 
         return errors

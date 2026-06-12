@@ -16,17 +16,23 @@ data/
 memory/
 swarm_backlog.json
 dummy_transcript.jsonl
+agent_context/memory_snapshot.json
+agent_context/task_capsules.jsonl
 agent_context/transcript.jsonl
 
 # Local dev
 scratch.py
 scratch_test.py
+scratch/
 
 # Claude Code local settings (machine-specific)
 .claude/settings.local.json
 
 # One-off migration scripts
 rename_memos.py
+
+# One-off local helper scripts
+append_log.py
 
 # Local permissions
 antigravity-permissions-grant/

@@ -1,0 +1,16 @@
+id = "code.small"
+step_min = 3
+step_max = 8
+level_min = 26
+level_max = 64
+model_policy = "codex"
+tools = ["search_memory", "validate_memory"]
+verification = ["test_run_required"]
+
+[memory_policy]
+max_cards = 10
+max_tokens = 4000
+
+[escalation]
+if_risk_above = 0.5
+escalate_to = "code.standard"
