@@ -1,11 +1,14 @@
 # Files present in git but excluded from git archive / sparse pulls into other projects.
-# Consumers get only src/, pyproject.toml, README.md.
+# Consumers get: src/, pyproject.toml, README.md, templates/
 
-agent_context/          export-ignore
-.claude/                export-ignore
-scripts/                export-ignore
-AGENTS.md               export-ignore
-INDEX.md                export-ignore
-append_log.py           export-ignore
-run_llm_benchmark.py    export-ignore
-test_auto.py            export-ignore
+agent_context/                      export-ignore
+.claude/                            export-ignore
+scripts/                            export-ignore
+AGENTS.md                           export-ignore
+INDEX.md                            export-ignore
+append_log.py                       export-ignore
+run_llm_benchmark.py                export-ignore
+test_auto.py                        export-ignore
+.DS_Store                           export-ignore
+src/memory_os/memory_graph/         export-ignore
+src/memory_os/user_persona/         export-ignore
