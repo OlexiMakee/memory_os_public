@@ -100,3 +100,26 @@ class ILlmProviderService(ABC):
         model: Optional[str] = None,
     ) -> str:
         pass
+
+class IHardwareScheduler(ABC):
+    """Interface for managing hardware resources (e.g. CPU multiprocessing, memory caching) in Memory OS."""
+
+    @abstractmethod
+    def execute_parallel(self, func: Any, items: List[Any], max_workers: Optional[int] = None) -> List[Any]:
+        """Execute a function in parallel across a list of items."""
+        pass
+
+    @abstractmethod
+    def cache_get(self, key: str) -> Optional[Any]:
+        """Retrieve an item from the fast memory cache."""
+        pass
+
+    @abstractmethod
+    def cache_set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> None:
+        """Store an item in the fast memory cache."""
+        pass
+
+    @abstractmethod
+    def cache_invalidate(self, key: str) -> None:
+        """Remove an item from the cache."""
+        pass

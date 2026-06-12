@@ -1,6 +1,13 @@
+import warnings
 from typing import List, Dict, Any, Optional
 from memory_os.core.interfaces import IMemoryStorage, IMemoryOSConfig
 from memory_os.core.models import MemoryNode, MemoryEdge, TaskCapsule
+
+_DIRECT_MUTATION_WARNING = (
+    "{method} is deprecated. Use RelationPatchStore.propose()+apply() "
+    "to mutate the graph so all changes are validated and auditable."
+)
+
 
 class MemoryRepository:
     """Repository pattern abstracting direct file/database operations for Memory OS."""
@@ -27,15 +34,66 @@ class MemoryRepository:
         internal_raw = self.storage.load_jsonl(self.config.internal_memory_dir / "nodes.jsonl")
         return [MemoryNode.from_dict(d) for d in raw + internal_raw]
 
-    def add_node(self, node: MemoryNode) -> None:
+    # ------------------------------------------------------------------
+    # Private mutation methods — called only by RelationPatchStore.apply()
+    # ------------------------------------------------------------------
+
+    def _add_node(self, node: MemoryNode) -> None:
         self.storage.append_jsonl(self._get_nodes_path(), node.to_dict())
         if self.indexer:
             self.indexer.index_node(node)
 
-    def save_nodes(self, nodes: List[MemoryNode]) -> None:
+    def _save_nodes(self, nodes: List[MemoryNode]) -> None:
         raw = [n.to_dict() for n in nodes]
         self.storage.save_jsonl(self._get_nodes_path(), raw)
         self.sync_graph_nodes()
+
+    def _add_edge(self, edge: MemoryEdge) -> None:
+        self.storage.append_jsonl(self._get_edges_path(), edge.to_dict())
+        if self.indexer:
+            self.indexer.index_edge(edge)
+
+    def _save_edges(self, edges: List[MemoryEdge]) -> None:
+        raw = [e.to_dict() for e in edges]
+        self.storage.save_jsonl(self._get_edges_path(), raw)
+
+    # ------------------------------------------------------------------
+    # Deprecated public API — kept for backwards compatibility only
+    # ------------------------------------------------------------------
+
+    def add_node(self, node: MemoryNode) -> None:
+        warnings.warn(
+            _DIRECT_MUTATION_WARNING.format(method="MemoryRepository.add_node"),
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self._add_node(node)
+
+    def save_nodes(self, nodes: List[MemoryNode]) -> None:
+        warnings.warn(
+            _DIRECT_MUTATION_WARNING.format(method="MemoryRepository.save_nodes"),
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self._save_nodes(nodes)
+
+    def add_edge(self, edge: MemoryEdge) -> None:
+        warnings.warn(
+            _DIRECT_MUTATION_WARNING.format(method="MemoryRepository.add_edge"),
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self._add_edge(edge)
+
+    def save_edges(self, edges: List[MemoryEdge]) -> None:
+        warnings.warn(
+            _DIRECT_MUTATION_WARNING.format(method="MemoryRepository.save_edges"),
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self._save_edges(edges)
+
+    # ------------------------------------------------------------------
 
     def sync_graph_nodes(self) -> None:
         from memory_os.core.core import MemoryOS
@@ -55,15 +113,6 @@ class MemoryRepository:
     def get_edges(self) -> List[MemoryEdge]:
         raw = self.storage.load_jsonl(self._get_edges_path())
         return [MemoryEdge.from_dict(d) for d in raw]
-
-    def add_edge(self, edge: MemoryEdge) -> None:
-        self.storage.append_jsonl(self._get_edges_path(), edge.to_dict())
-        if self.indexer:
-            self.indexer.index_edge(edge)
-
-    def save_edges(self, edges: List[MemoryEdge]) -> None:
-        raw = [e.to_dict() for e in edges]
-        self.storage.save_jsonl(self._get_edges_path(), raw)
 
     def get_task_capsules(self) -> List[TaskCapsule]:
         raw = self.storage.load_jsonl(self._get_capsules_path())

@@ -112,6 +112,70 @@ class MemoryOS:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_performance_name ON memory_os_performance(algorithm_name)")
             
+            # Graph Nodes
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS graph_nodes (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    status TEXT,
+                    freshness TEXT,
+                    trust TEXT,
+                    tags TEXT,
+                    valid_from TEXT DEFAULT (datetime('now', 'localtime')),
+                    valid_to TEXT
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(type)")
+            
+            # Graph Nodes FTS
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS graph_nodes_fts USING fts5(
+                    id UNINDEXED,
+                    type UNINDEXED,
+                    summary,
+                    content="graph_nodes",
+                    content_rowid="rowid"
+                )
+            """)
+            
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS graph_nodes_ai AFTER INSERT ON graph_nodes BEGIN
+                    INSERT INTO graph_nodes_fts(rowid, id, type, summary)
+                    VALUES (new.rowid, new.id, new.type, new.summary);
+                END;
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS graph_nodes_ad AFTER DELETE ON graph_nodes BEGIN
+                    INSERT INTO graph_nodes_fts(graph_nodes_fts, rowid, id, type, summary)
+                    VALUES('delete', old.rowid, old.id, old.type, old.summary);
+                END;
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS graph_nodes_au AFTER UPDATE ON graph_nodes BEGIN
+                    INSERT INTO graph_nodes_fts(graph_nodes_fts, rowid, id, type, summary)
+                    VALUES('delete', old.rowid, old.id, old.type, old.summary);
+                    INSERT INTO graph_nodes_fts(rowid, id, type, summary)
+                    VALUES (new.rowid, new.id, new.type, new.summary);
+                END;
+            """)
+            
+            # Graph Edges
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS graph_edges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    valid_from TEXT DEFAULT (datetime('now', 'localtime')),
+                    valid_to TEXT,
+                    UNIQUE(source, target, type)
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(type)")
+            
             conn.commit()
         finally:
             conn.close()
@@ -165,3 +229,54 @@ class MemoryOS:
             return [dict(row) for row in cursor.fetchall()]
         finally:
             conn.close()
+
+    def insert_graph_node(self, node_id: str, node_type: str, summary: str, status: Optional[str] = None, freshness: Optional[str] = None, trust: Optional[str] = None, tags: Optional[str] = None) -> None:
+        """Insert or update a node in the graph index."""
+        conn = self.get_connection()
+        try:
+            conn.execute("""
+                INSERT INTO graph_nodes (id, type, summary, status, freshness, trust, tags)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    type = excluded.type,
+                    summary = excluded.summary,
+                    status = excluded.status,
+                    freshness = excluded.freshness,
+                    trust = excluded.trust,
+                    tags = excluded.tags
+            """, (node_id, node_type, summary, status, freshness, trust, tags))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def insert_graph_edge(self, source: str, target: str, edge_type: str) -> None:
+        conn = self.get_connection()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO graph_edges (source, target, type) VALUES (?, ?, ?)",
+                (source, target, edge_type)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def index_node(self, node: Any) -> None:
+        """Called by MemoryRepository to mirror nodes into SQLite."""
+        tags_str = ",".join(node.tags) if node.tags else None
+        self.insert_graph_node(
+            node_id=node.id,
+            node_type=node.type,
+            summary=node.summary,
+            status=node.status,
+            freshness=node.freshness,
+            trust=node.trust,
+            tags=tags_str
+        )
+
+    def index_edge(self, edge: Any) -> None:
+        """Called by MemoryRepository to mirror edges into SQLite."""
+        self.insert_graph_edge(
+            source=edge.source,
+            target=edge.target,
+            edge_type=edge.type
+        )

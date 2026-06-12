@@ -14,6 +14,11 @@ class IDomainAdapter(ABC):
         pass
 
     @abstractmethod
+    def extract_metadata(self, resource_uri: str, content: Any) -> Dict[str, Any]:
+        """Extract domain-specific metadata (e.g. symbols, headers) for snapshot indexing."""
+        pass
+
+    @abstractmethod
     def parse_to_patches(self, resource_uri: str, content: Any, protocol_level: int = 4) -> List[RelationPatch]:
         """Convert a domain resource into a series of RelationPatches."""
         pass
@@ -23,6 +28,51 @@ class CodebaseDomainAdapter(IDomainAdapter):
     
     def get_domain_name(self) -> str:
         return "codebase"
+
+    def extract_metadata(self, resource_uri: str, content: Any) -> Dict[str, Any]:
+        if not isinstance(content, str):
+            return {}
+            
+        meta = {}
+        if resource_uri.endswith(".py"):
+            try:
+                tree = ast.parse(content)
+                funcs = []
+                classes = []
+                imports = []
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        funcs.append(f"{node.name}:{node.lineno}")
+                    elif isinstance(node, ast.ClassDef):
+                        classes.append(f"{node.name}:{node.lineno}")
+                    elif isinstance(node, ast.Import):
+                        imports.extend(alias.name.split(".")[0] for alias in node.names)
+                    elif isinstance(node, ast.ImportFrom) and node.module:
+                        imports.append(node.module.split(".")[0])
+                meta.update({
+                    "functions": funcs[:30],
+                    "classes": classes[:20],
+                    "dependencies": sorted(set(imports))[:30],
+                })
+                
+                # Routes
+                routes = re.findall(r"@\w+_bp\.route\(['\"]([^'\"]+)['\"](?:,\s*methods=([^\)]*))?\\)", content)
+                if routes:
+                    meta["routes"] = [f"{path} {methods or '[GET]'}" for path, methods in routes[:30]]
+            except SyntaxError:
+                pass
+                
+        elif resource_uri.endswith(".js"):
+            funcs = re.findall(r"\b(?:export\s+)?(?:async\s+)?function\s+([A-Za-z0-9_]+)\s*\(", content)
+            classes = re.findall(r"\b(?:export\s+)?class\s+([A-Za-z0-9_]+)\b", content)
+            imports = re.findall(r"\bimport\b[^;]*?\bfrom\s+['\"]([^'\"]+)['\"]", content)
+            meta.update({
+                "functions": funcs[:30],
+                "classes": classes[:20],
+                "dependencies": imports[:30],
+            })
+            
+        return meta
 
     def parse_to_patches(self, resource_uri: str, content: Any, protocol_level: int = 4) -> List[RelationPatch]:
         if not isinstance(content, str):

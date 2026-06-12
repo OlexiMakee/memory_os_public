@@ -247,11 +247,9 @@ def cmd_workflows(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     return 0 if report["ok"] else 1
 
 def cmd_compact(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    root = Path(args.root).resolve()
-    from memory_os.toolkit.compact_capsules import compact_capsules
-    
-    compact_capsules(root, provider_override=args.provider, model_override=args.model)
-    return 0
+    from memory_os.modules.compactor import MemoryCompactor
+    compactor = MemoryCompactor(config=config)
+    return compactor.compact_capsules(provider=args.provider, model=args.model)
 
 def cmd_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     from memory_os.core.repository import MemoryRepository
@@ -695,7 +693,7 @@ def cmd_ide_grant(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 def cmd_stats(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     import yaml
     root = Path(args.root).resolve()
-    os_kernel = MemoryOS(str(root / "data" / "memory_os.db"))
+    os_kernel = MemoryOS(db_path=str(root / "data" / "memory_os.db"))
     conn = os_kernel.get_connection()
     try:
         cur = conn.cursor()

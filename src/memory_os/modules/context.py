@@ -5,11 +5,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from memory_os.core.adapters import CodebaseDomainAdapter
+
 class ContextRegistry:
     """Standalone developer memory indexing engine. Builds compact context snapshots."""
 
     def __init__(self, root_dir: str):
         self.root_dir = Path(root_dir).resolve()
+        self.adapter = CodebaseDomainAdapter()
 
     def rel(self, path: Path) -> str:
         """Get relative path string."""
@@ -76,48 +79,7 @@ class ContextRegistry:
         """Strip spaces and shorten string."""
         return re.sub(r"\s+", " ", ContextRegistry.redact(text)).strip()[:max_chars]
 
-    @staticmethod
-    def python_symbols(text: str) -> Dict[str, List[str]]:
-        """Parse python abstract syntax tree for classes, functions, and imports."""
-        try:
-            tree = ast.parse(text)
-        except SyntaxError:
-            return {}
-        funcs: List[str] = []
-        classes: List[str] = []
-        imports: List[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                funcs.append(f"{node.name}:{node.lineno}")
-            elif isinstance(node, ast.ClassDef):
-                classes.append(f"{node.name}:{node.lineno}")
-            elif isinstance(node, ast.Import):
-                imports.extend(alias.name.split(".")[0] for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imports.append(node.module.split(".")[0])
-        return {
-            "functions": funcs[:30],
-            "classes": classes[:20],
-            "dependencies": sorted(set(imports))[:30],
-        }
 
-    @staticmethod
-    def js_symbols(text: str) -> Dict[str, List[str]]:
-        """Regex parse javascript files for exported functions/classes."""
-        symbols = re.findall(r"\b(?:export\s+)?(?:async\s+)?function\s+([A-Za-z0-9_]+)\s*\(", text)
-        classes = re.findall(r"\b(?:export\s+)?class\s+([A-Za-z0-9_]+)\b", text)
-        imports = re.findall(r"\bimport\b[^;]*?\bfrom\s+['\"]([^'\"]+)['\"]", text)
-        return {
-            "functions": symbols[:30],
-            "classes": classes[:20],
-            "dependencies": imports[:30],
-        }
-
-    @staticmethod
-    def route_symbols(text: str) -> List[str]:
-        """Regex parse python files for blueprints/flask routing definitions."""
-        routes = re.findall(r"@\w+_bp\.route\(['\"]([^'\"]+)['\"](?:,\s*methods=([^\)]*))?\\)", text)
-        return [f"{path} {methods or '[GET]'}" for path, methods in routes[:30]]
 
     def build_pointer(self, path: Path, text: str, max_preview_chars: int) -> Dict[str, Any]:
         """Construct layer pointer mappings."""
@@ -128,13 +90,8 @@ class ContextRegistry:
             "bytes": path.stat().st_size,
             "sha256_16": self.sha256_text(text),
         }
-        if suffix == ".py":
-            meta.update(self.python_symbols(text))
-            routes = self.route_symbols(text)
-            if routes:
-                meta["routes"] = routes
-        elif suffix == ".js":
-            meta.update(self.js_symbols(text))
+        if suffix in {".py", ".js"}:
+            meta.update(self.adapter.extract_metadata(path.name, text))
         elif suffix in {".md", ".txt"}:
             headings = re.findall(r"^(#{1,4})\s+(.+)$", text, flags=re.MULTILINE)
             meta["headings"] = [title.strip() for _, title in headings[:20]]
