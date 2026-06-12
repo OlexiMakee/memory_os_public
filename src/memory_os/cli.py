@@ -1036,6 +1036,22 @@ def cmd_monitor(args: argparse.Namespace, config: MemoryOSConfig) -> int:
             print("\nMonitor stopped.")
     return 0
 
+
+def cmd_export_obsidian(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.toolkit.obsidian_exporter import export_obsidian_vault
+    nodes_path = config.internal_memory_dir / 'nodes.jsonl'
+    edges_path = config.internal_memory_dir / 'edges.jsonl'
+    root_dir = Path(config.root_dir)
+    success = export_obsidian_vault(root_dir, nodes_path, edges_path)
+    return 0 if success else 1
+
+def cmd_linear_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.toolkit.linear_sync import sync_roadmap_with_linear
+    root_dir = Path(config.root_dir)
+    success = sync_roadmap_with_linear(root_dir)
+    return 0 if success else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Memory OS project-local CLI.")
     parser.add_argument("--root", default=".", help="Project root")
@@ -1251,8 +1267,16 @@ def build_parser() -> argparse.ArgumentParser:
     unlinked_parser.add_argument("--json", action="store_true", help="Output raw JSON.")
     unlinked_parser.set_defaults(func=cmd_unlinked)
 
+
     ide_grant_parser = subparsers.add_parser("ide-grant", help="Enable autonomous execution for the IDE agent.")
     ide_grant_parser.set_defaults(func=cmd_ide_grant)
+
+    obsidian_parser = subparsers.add_parser("export-obsidian", help="Export Memory OS graph to an Obsidian Vault.")
+    obsidian_parser.set_defaults(func=cmd_export_obsidian)
+    
+    linear_parser = subparsers.add_parser("linear-sync", help="Two-way sync of GLOBAL_ROADMAP.md with Linear issues.")
+    linear_parser.set_defaults(func=cmd_linear_sync)
+
 
     return parser
 
