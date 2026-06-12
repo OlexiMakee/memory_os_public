@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: memory_os
+Version: 0.1.0
+Summary: Portable agent Memory OS kernel — graph memory, telemetry, lifecycle, compaction, search.
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"

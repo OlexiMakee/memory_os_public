@@ -1,6 +1,10 @@
 # Memory OS (Portable Core)
 
-Memory OS is a highly decoupled, stateful graph memory and agent orchestration kernel. It uses a 12-step quantization scale to isolate tasks, build semantic graphs of dependencies, and intelligently prune unneeded contexts to avoid LLM context bloat.
+**Memory OS extends an LLM beyond its context window by giving it a local, indexed, protocol-governed long-term memory graph.**
+
+It is a local-first long-term semantic memory prosthesis for LLM agents. Instead of forcing the LLM to remember everything in its limited context window, Memory OS stores knowledge as explicitly linked nodes, relations, evidence, metadata, and lifecycle states. It acts as an external hippocampus—retrieving only the relevant context precisely when the agent needs it.
+
+> *LLM shouldn't remember everything. It should know how to ask Memory OS.*
 
 ## Standalone Usage
 

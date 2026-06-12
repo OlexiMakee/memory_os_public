@@ -9,6 +9,7 @@ class NodeType(str, Enum):
     CONNECTOR = "connector"
     CONFIG = "config"
     POLICY = "policy"
+    MODULE_CLUSTER = "module_cluster"  # structural cluster of related files (inferred)
 
 class EdgeType(str, Enum):
     DEPENDS_ON = "depends_on"
@@ -17,6 +18,7 @@ class EdgeType(str, Enum):
     OVERRIDES = "overrides"
     CONFIGURES = "configures"
     SECURES = "secures"
+    CONTAINS = "contains"  # module_cluster -> code_file
 
 @dataclass
 class MemoryNode:
@@ -28,6 +30,7 @@ class MemoryNode:
     freshness: str = ""
     trust: str = "unverified"
     related_nodes: List[str] = field(default_factory=list)
+    tags: List[str] = field(default_factory=list)  # optional labels for search/triage filtering
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MemoryNode":
@@ -39,7 +42,8 @@ class MemoryNode:
             status=data.get("status", "draft"),
             freshness=data.get("freshness", ""),
             trust=data.get("trust", "unverified"),
-            related_nodes=data.get("related_nodes", [])
+            related_nodes=data.get("related_nodes", []),
+            tags=data.get("tags", []),
         )
         
     def to_dict(self) -> Dict[str, Any]:

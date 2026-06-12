@@ -13,6 +13,8 @@ from memory_os.core.exceptions import MemoryOSError, ValidationError
 from memory_os.core.config import MemoryOSConfig
 from memory_os.core.storage import FileSystemMemoryStorage
 from memory_os.core.llm_service import DefaultLlmProviderService
+from memory_os.modules.validator import EvolutionGate
+from memory_os.modules.exporter import PolyglotExporter
 
 SYSTEM_PROMPT = """You are the Memory OS Knowledge Compactor.
 Your job is to analyze developer task logs (task capsules) and existing memory nodes, then extract new permanent knowledge nodes (rules, facts, configurations, or policies) and relationships (edges).
@@ -41,7 +43,9 @@ Your output must be ONLY a raw JSON block with the following schema:
       "id": "node.id.string",
       "type": "rule|fact|variable|connector|config|policy",
       "summary": "Concise lesson details.",
-      "evidence": ["relative/file/path.py"]
+      "evidence": ["relative/file/path.py"],
+      "tags": ["optional", "labels"],
+      "globs": ["optional", "src/**/*.py", "app/services/*.py"]
     }
   ],
   "edges": [
@@ -52,6 +56,8 @@ Your output must be ONLY a raw JSON block with the following schema:
     }
   ]
 }
+The "tags" field is optional but encouraged — use short lowercase labels like ["db", "migration", "breaking-change", "api", "auth", "llm"] to enable filtering. Omit if no clear category applies.
+The "globs" field is an optional list of glob strings for Cursor rule matching. If the rule specifically applies to certain file paths or extensions (e.g., frontend code, backend services), generate the appropriate glob patterns. Omit if it's a global project rule.
 Do not write markdown wraps like ```json or any other text before/after. Just the JSON object.
 """
 
@@ -94,8 +100,8 @@ class MemoryCompactor:
     
     ):
         self.config = config or MemoryOSConfig()
-        storage = FileSystemMemoryStorage()
-        self.repository = repository or MemoryRepository(storage, self.config)
+        self.storage = FileSystemMemoryStorage()
+        self.repository = repository or MemoryRepository(self.storage, self.config)
         self.llm_service = llm_service or DefaultLlmProviderService()
 
 
@@ -160,14 +166,16 @@ class MemoryCompactor:
         node_append_count = 0
         edge_append_count = 0
 
+        # Read existing nodes for reference ONCE to prevent O(N * B) disk scans
+        existing_nodes = [n.to_dict() for n in self.repository.get_nodes()]
+        existing_node_info = [{"id": n["id"], "type": n["type"], "summary": n["summary"]} for n in existing_nodes]
+        existing_node_ids = {n["id"] for n in existing_nodes}
+        new_node_ids = set()
+
         for i in range(0, len(uncompacted), batch_size):
             batch = uncompacted[i:i+batch_size]
             batch_num = (i // batch_size) + 1
             logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch)} capsules)...")
-
-            # Read existing nodes for reference
-            existing_nodes = [n.to_dict() for n in self.repository.get_nodes()]
-            existing_node_info = [{"id": n["id"], "type": n["type"], "summary": n["summary"]} for n in existing_nodes]
 
             # Build user message for this batch
             user_msg_data = {
@@ -218,41 +226,55 @@ class MemoryCompactor:
                         else:
                             proposed_nodes.append(item)
 
-            existing_node_ids = {n["id"] for n in existing_nodes}
-            new_node_ids = set()
+            # --- EvolutionGate: verify before commit ---
+            existing_edges = self._load_jsonl(edges_path)
+            existing_verified = [n for n in existing_nodes if n.get("status") == "verified"]
+            gate = EvolutionGate(
+                existing_node_ids=existing_node_ids,
+                existing_edges=existing_edges,
+                existing_verified_nodes=existing_verified,
+            )
+            gate_report = gate.check_nodes(proposed_nodes)
 
-            valid_node_types = {t.value for t in NodeType}
+            for line in gate_report.summary_lines():
+                logger.info(line)
 
-            for node in proposed_nodes:
+            # Log rejections to events.jsonl so failures are never silent
+            for verdict in gate_report.rejected:
+                rejected_id = verdict.node.get("id", "unknown")
+                self._append_jsonl(events_path, {
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "event": "memory.node.rejected",
+                    "node_id": rejected_id,
+                    "claim": f"Rejected at stage '{verdict.stage}': {verdict.reason}",
+                    "evidence": verdict.node.get("evidence", []),
+                    "validator": "evolution_gate",
+                    "status": "rejected",
+                    "stage": verdict.stage,
+                    "reason": verdict.reason,
+                })
+
+            try:
+                rel_capsules = str(self.config.capsules_file.relative_to(self.config.root_dir))
+            except ValueError:
+                rel_capsules = "agent_context/task_capsules.jsonl"
+
+            for node in gate_report.accepted:
                 node_id = node.get("id")
                 node_type = node.get("type")
                 summary = node.get("summary")
                 evidence = node.get("evidence", [])
 
-                if not node_id or not node_type or not summary:
-                    logger.info(f"Skipping invalid proposed node: {node}")
-                    continue
-
-                if node_type not in valid_node_types:
-                    logger.info(f"Skipping proposed node '{node_id}' with invalid type '{node_type}'")
-                    continue
-
-                if node_id in existing_node_ids:
-                    logger.info(f"Node '{node_id}' already exists in nodes.jsonl. Skipping proposal.")
-                    continue
-
-                # Clean evidence: keep only existing files, and always add the capsules file
-                cleaned_evidence = []
-                for file_path in evidence:
-                    if (self.config.root_dir / file_path).exists() and file_path not in cleaned_evidence:
-                        cleaned_evidence.append(file_path)
-                
-                # Check capsules relative path to root_dir
-                try:
-                    rel_capsules = str(self.config.capsules_file.relative_to(self.config.root_dir))
-                except ValueError:
-                    rel_capsules = "agent_context/task_capsules.jsonl"
-                
+                # Clean evidence: keep only existing files, always add capsules path
+                cleaned_evidence = [
+                    fp for fp in evidence
+                    if (self.config.root_dir / fp).exists() and fp not in []
+                ]
+                seen = set()
+                cleaned_evidence = [
+                    fp for fp in cleaned_evidence
+                    if not (fp in seen or seen.add(fp))
+                ]
                 if rel_capsules not in cleaned_evidence:
                     cleaned_evidence.append(rel_capsules)
 
@@ -264,25 +286,29 @@ class MemoryCompactor:
                     "status": "draft",
                     "freshness": datetime.now().isoformat(timespec="seconds"),
                     "trust": "unverified",
-                    "related_nodes": []
+                    "related_nodes": [],
+                    "tags": node.get("tags", []),
                 }
 
                 self._append_jsonl(nodes_path, new_node)
                 new_node_ids.add(node_id)
+                existing_node_ids.add(node_id)
+                existing_node_info.append({"id": node_id, "type": node_type, "summary": summary})
                 node_append_count += 1
                 logger.info(f"Proposed node '{node_id}' added as draft.")
 
-                # Log node proposed event
-                new_event = {
+                exporter = PolyglotExporter(self.config.root_dir)
+                exporter.export_node(node_id, node_type, summary, cleaned_evidence, node.get("globs"))
+
+                self._append_jsonl(events_path, {
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "event": "memory.node.proposed",
                     "node_id": node_id,
                     "claim": f"Propose rule/fact: {summary}",
                     "evidence": cleaned_evidence,
-                    "validator": "memory_os_compactor",
-                    "status": "pending"
-                }
-                self._append_jsonl(events_path, new_event)
+                    "validator": "evolution_gate",
+                    "status": "pending",
+                })
 
             # Validate and append edges
             valid_edge_types = {"depends_on", "triggers", "refutes", "overrides", "configures", "secures"}
@@ -418,17 +444,38 @@ class MemoryCompactor:
             logger.info("LLM did not propose any compressions. Graph is already optimal.")
             return 0
 
+        existing_edges = self._load_jsonl(edges_path)
         existing_node_ids = {n["id"] for n in nodes}
-        new_node_ids = set()
+        gate = EvolutionGate(
+            existing_node_ids=existing_node_ids,
+            existing_edges=existing_edges,
+            existing_verified_nodes=verified_nodes,
+        )
+        gate_report = gate.check_nodes(proposed_nodes)
 
+        for line in gate_report.summary_lines():
+            logger.info(line)
+
+        for verdict in gate_report.rejected:
+            rejected_id = verdict.node.get("id", "unknown")
+            self._append_jsonl(events_path, {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "event": "memory.node.rejected",
+                "node_id": rejected_id,
+                "claim": f"Rejected at stage '{verdict.stage}': {verdict.reason}",
+                "evidence": verdict.node.get("evidence", []),
+                "validator": "evolution_gate",
+                "status": "rejected",
+                "stage": verdict.stage,
+                "reason": verdict.reason,
+            })
+
+        new_node_ids = set()
         node_append_count = 0
         edge_append_count = 0
 
-        for node in proposed_nodes:
+        for node in gate_report.accepted:
             node_id = node.get("id")
-            if not node_id or node_id in existing_node_ids:
-                continue
-            
             new_node = {
                 "id": node_id,
                 "type": node.get("type", "rule"),
@@ -437,23 +484,26 @@ class MemoryCompactor:
                 "status": "draft",
                 "freshness": datetime.now().isoformat(timespec="seconds"),
                 "trust": "unverified",
-                "related_nodes": []
+                "related_nodes": [],
+                "tags": node.get("tags", []),
             }
             self._append_jsonl(nodes_path, new_node)
             new_node_ids.add(node_id)
             node_append_count += 1
             logger.info(f"Proposed compressed node '{node_id}' added as draft.")
 
-            new_event = {
+            exporter = PolyglotExporter(self.config.root_dir)
+            exporter.export_node(node_id, new_node["type"], new_node["summary"], new_node["evidence"], node.get("globs"))
+
+            self._append_jsonl(events_path, {
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "event": "memory.node.proposed",
                 "node_id": node_id,
                 "claim": f"Compressed rule: {new_node['summary']}",
                 "evidence": new_node["evidence"],
-                "validator": "memory_os_compressor",
-                "status": "pending"
-            }
-            self._append_jsonl(events_path, new_event)
+                "validator": "evolution_gate",
+                "status": "pending",
+            })
 
         for edge in proposed_edges:
             if edge.get("source") in new_node_ids and edge.get("target") in existing_node_ids:

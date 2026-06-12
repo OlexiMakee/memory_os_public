@@ -67,6 +67,86 @@ class MemoryOS:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance DESC)")
             
+            # FTS5 Virtual Table for full-text search
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                    id UNINDEXED,
+                    content,
+                    summary,
+                    content="memories",
+                    content_rowid="rowid"
+                )
+            """)
+            
+            # Create triggers to keep FTS index synced
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+                    INSERT INTO memories_fts(rowid, id, content, summary)
+                    VALUES (new.rowid, new.id, new.content, new.summary);
+                END;
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+                    INSERT INTO memories_fts(memories_fts, rowid, id, content, summary)
+                    VALUES('delete', old.rowid, old.id, old.content, old.summary);
+                END;
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+                    INSERT INTO memories_fts(memories_fts, rowid, id, content, summary)
+                    VALUES('delete', old.rowid, old.id, old.content, old.summary);
+                    INSERT INTO memories_fts(rowid, id, content, summary)
+                    VALUES (new.rowid, new.id, new.content, new.summary);
+                END;
+            """)
+            
+            # Graph Nodes table for Memory OS Phase 5
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS graph_nodes (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    status TEXT,
+                    freshness TEXT,
+                    trust TEXT,
+                    tags TEXT
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(type)")
+            
+            # FTS5 Virtual Table for graph_nodes
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS graph_nodes_fts USING fts5(
+                    id UNINDEXED,
+                    type,
+                    summary,
+                    content="graph_nodes",
+                    content_rowid="rowid"
+                )
+            """)
+            
+            # Create triggers for graph_nodes_fts
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS graph_nodes_ai AFTER INSERT ON graph_nodes BEGIN
+                    INSERT INTO graph_nodes_fts(rowid, id, type, summary)
+                    VALUES (new.rowid, new.id, new.type, new.summary);
+                END;
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS graph_nodes_ad AFTER DELETE ON graph_nodes BEGIN
+                    INSERT INTO graph_nodes_fts(graph_nodes_fts, rowid, id, type, summary)
+                    VALUES('delete', old.rowid, old.id, old.type, old.summary);
+                END;
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS graph_nodes_au AFTER UPDATE ON graph_nodes BEGIN
+                    INSERT INTO graph_nodes_fts(graph_nodes_fts, rowid, id, type, summary)
+                    VALUES('delete', old.rowid, old.id, old.type, old.summary);
+                    INSERT INTO graph_nodes_fts(rowid, id, type, summary)
+                    VALUES (new.rowid, new.id, new.type, new.summary);
+                END;
+            """)
+            
             # Algorithm Performance table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS memory_os_performance (
@@ -111,6 +191,24 @@ class MemoryOS:
         try:
             cursor = conn.cursor()
             cursor.execute("SELECT id, type, content, summary, importance, timestamp FROM memories ORDER BY importance DESC, timestamp DESC LIMIT ?", (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def search_memories(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Full-text search across memories using FTS5."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            # rank is the BM25 score provided by FTS5, lower is better. We sort by rank (relevance) and then importance.
+            cursor.execute("""
+                SELECT m.id, m.type, m.content, m.summary, m.importance, m.timestamp
+                FROM memories_fts fts
+                JOIN memories m ON m.rowid = fts.rowid
+                WHERE memories_fts MATCH ?
+                ORDER BY fts.rank, m.importance DESC
+                LIMIT ?
+            """, (query, limit))
             return [dict(row) for row in cursor.fetchall()]
         finally:
             conn.close()

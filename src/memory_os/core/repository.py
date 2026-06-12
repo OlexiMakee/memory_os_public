@@ -5,9 +5,10 @@ from memory_os.core.models import MemoryNode, MemoryEdge, TaskCapsule
 class MemoryRepository:
     """Repository pattern abstracting direct file/database operations for Memory OS."""
 
-    def __init__(self, storage: IMemoryStorage, config: IMemoryOSConfig):
+    def __init__(self, storage: IMemoryStorage, config: IMemoryOSConfig, indexer: Optional[Any] = None):
         self.storage = storage
         self.config = config
+        self.indexer = indexer
 
     def _get_nodes_path(self):
         return self.config.memory_dir / "nodes.jsonl"
@@ -18,12 +19,17 @@ class MemoryRepository:
     def _get_capsules_path(self):
         return self.config.capsules_file
 
+    def _get_patches_path(self):
+        return self.config.memory_dir / "patches.jsonl"
+
     def get_nodes(self) -> List[MemoryNode]:
         raw = self.storage.load_jsonl(self._get_nodes_path())
         return [MemoryNode.from_dict(d) for d in raw]
 
     def add_node(self, node: MemoryNode) -> None:
         self.storage.append_jsonl(self._get_nodes_path(), node.to_dict())
+        if self.indexer:
+            self.indexer.index_node(node)
 
     def save_nodes(self, nodes: List[MemoryNode]) -> None:
         raw = [n.to_dict() for n in nodes]
@@ -35,6 +41,8 @@ class MemoryRepository:
 
     def add_edge(self, edge: MemoryEdge) -> None:
         self.storage.append_jsonl(self._get_edges_path(), edge.to_dict())
+        if self.indexer:
+            self.indexer.index_edge(edge)
 
     def save_edges(self, edges: List[MemoryEdge]) -> None:
         raw = [e.to_dict() for e in edges]
@@ -46,3 +54,12 @@ class MemoryRepository:
 
     def add_task_capsule(self, capsule: TaskCapsule) -> None:
         self.storage.append_jsonl(self._get_capsules_path(), capsule.to_dict())
+
+    def get_patches(self) -> List[Any]:
+        from memory_os.core.patch import RelationPatch
+        raw = self.storage.load_jsonl(self._get_patches_path())
+        return [RelationPatch(**d) for d in raw]
+
+    def save_patch(self, patch: Any) -> None:
+        from dataclasses import asdict
+        self.storage.append_jsonl(self._get_patches_path(), asdict(patch))

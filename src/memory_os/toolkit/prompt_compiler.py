@@ -8,22 +8,35 @@ from pathlib import Path
 def compile_context(root: Path) -> str:
     """
     Compiles generic system context from local files.
+    Implemented with Cache Warmth Ordering (STATIC -> DYNAMIC) for optimal Anthropic Prefix Caching.
     """
     sections = []
     
-    # 1. Agent Rules
+    # ==========================================
+    # CACHE WARMTH ORDERING (STATIC -> DYNAMIC)
+    # ==========================================
+    # Anthropic's prefix cache works best when static instructions appear first,
+    # and dynamic variables appear last. Any change invalidates the cache for
+    # all subsequent tokens.
+    
+    # TIER 1: VERY STATIC (Rarely changes during a session)
     rules_path = root / "agent_context" / "AGENT_RULES.md"
     if rules_path.exists():
         sections.append("## SYSTEM RULES")
         sections.append(rules_path.read_text(encoding="utf-8").strip())
         
-    # 2. Workflows
     workflows_path = root / "agent_context" / "WORKFLOWS.md"
     if workflows_path.exists():
         sections.append("## WORKFLOWS")
         sections.append(workflows_path.read_text(encoding="utf-8").strip())
         
-    # 3. Active Memory (RAG output)
+    # TIER 2: SEMI-STATIC (Changes occasionally during a session)
+    codebase_map_path = root / "agent_context" / "codebase_map.md"
+    if codebase_map_path.exists():
+        sections.append("## CODEBASE STRUCTURE MAP")
+        sections.append(codebase_map_path.read_text(encoding="utf-8").strip())
+
+    # TIER 3: DYNAMIC (Changes per task or query)
     memory_path = root / "agent_context" / "active_memory.yaml"
     if memory_path.exists():
         sections.append("## ACTIVE MEMORY CONTEXT")
@@ -31,13 +44,13 @@ def compile_context(root: Path) -> str:
         sections.append(memory_path.read_text(encoding="utf-8").strip())
         sections.append("```")
         
-    # 4. Handshake status
+    # TIER 4: HIGHLY DYNAMIC (Changes every handoff/checkpoint)
     handshake_path = root / "agent_context" / "HANDSHAKE.md"
     if handshake_path.exists():
         sections.append("## AGENT HANDSHAKE")
         sections.append(handshake_path.read_text(encoding="utf-8").strip())
-        
+
     if not sections:
         return "No Memory OS context files found in agent_context/ directory."
-        
+
     return "\n\n".join(sections)

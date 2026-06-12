@@ -99,15 +99,31 @@ class MemorySearcher:
 
         query_lower = query.strip().lower()
 
-        # 1. Search memory nodes
-        nodes_by_id = {node["id"]: node for node in nodes}
+        # 1. Search memory nodes using SQLite Graph Index (Phase 5)
+        from memory_os.core.core import MemoryOS
+        db = MemoryOS(self.config)
+        conn = db.get_connection()
         matched_node_ids = set()
-        for node in nodes:
-            if (query_lower in node["id"].lower() or 
-                query_lower in node["summary"].lower() or 
-                any(query_lower in ev.lower() for ev in node["evidence"]) or
-                query_lower in node["type"].lower()):
-                matched_node_ids.add(node["id"])
+        nodes_by_id = {}
+        try:
+            # Load all nodes into memory for traversal (could be optimized further in Phase 6)
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM graph_nodes")
+            for row in cursor.fetchall():
+                d = dict(row)
+                d["evidence"] = [] # SQLite doesn't store array, we'll just mock it or fetch from JSONL if needed
+                nodes_by_id[d["id"]] = d
+            
+            # Fast search via SQLite FTS5 Match
+            # Note: We query the graph_nodes_fts virtual table for efficient full-text indexing
+            cursor.execute("""
+                SELECT id FROM graph_nodes_fts 
+                WHERE graph_nodes_fts MATCH ?
+            """, (query,))
+            for row in cursor.fetchall():
+                matched_node_ids.add(row["id"])
+        finally:
+            conn.close()
 
         all_matched_node_ids = self.traverse_graph(matched_node_ids, depth, nodes_by_id, edges)
         matched_nodes = [nodes_by_id[nid] for nid in all_matched_node_ids if nid in nodes_by_id]

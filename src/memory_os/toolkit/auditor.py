@@ -17,9 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.validate_task_capsules import validate_rows
+from memory_os.modules.validator import MemoryValidator
 from memory_os.toolkit.workflow_validator import build_report as build_workflow_report
-from memory_os.toolkit.memory_validator import validate_proposals_file
 from memory_os.core.config import MemoryOSConfig
 
 STEP_NAMES = {
@@ -272,7 +271,8 @@ def audit(root: Path = ROOT) -> Dict[str, Any]:
     capsules_path = config.capsules_file
     capsule_lines = read_text(capsules_path).splitlines()
     rows, jsonl_errors = load_jsonl(capsules_path)
-    validation_errors = validate_rows(capsule_lines)
+    validator = MemoryValidator(config)
+    validation_errors = validator.validate_rows(capsule_lines)
     
     auto_messages = auto_transition_proposals(root)
     
@@ -284,7 +284,7 @@ def audit(root: Path = ROOT) -> Dict[str, Any]:
         "capsules": summarize_capsules(rows),
         "capsule_jsonl_errors": jsonl_errors,
         "capsule_validation_errors": validation_errors,
-        "proposal_validation_errors": validate_proposals_file(config.proposals_file),
+        "proposal_validation_errors": validator.validate_proposals_file(config.proposals_file),
         "memory_lifecycle": inspect_memory_lifecycle(root),
         "workflow_manifest": build_workflow_report(root),
         "roadmap": roadmap_system_status(read_text(config.root_dir / "agent_context" / "GLOBAL_ROADMAP.md")),
