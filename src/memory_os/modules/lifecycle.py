@@ -94,8 +94,13 @@ class LifecycleManager:
         edges = self._load_jsonl(edges_file)
         events = self._load_jsonl(events_file)
 
+        # Snapshot of nodes that were already verified before this call.
+        # Used by the override-chain logic below so that a node's source_verified
+        # status is evaluated against a stable set, not the mutating updated_nodes.
+        pre_verified_ids: Set[str] = {n["id"] for n in nodes if n.get("status") == "verified"}
+
         updated_nodes = []
-        verified_ids = set()
+        verified_ids: Set[str] = set()  # newly promoted in this call
         new_events = []
 
         for node in nodes:
@@ -140,17 +145,18 @@ class LifecycleManager:
 
             updated_nodes.append(node)
 
+        # Stable verified set: pre-existing + newly promoted this call.
+        # Evaluated as a snapshot so transitive chains (A→B→C) resolve correctly
+        # even when B is superseded mid-loop before its own outgoing edges are checked.
+        all_verified_ids: Set[str] = pre_verified_ids | verified_ids
+
         # Handle overrides/refutations
         for edge in edges:
             if edge["type"] in ["overrides", "refutes"]:
                 source_id = edge["source"]
                 target_id = edge["target"]
 
-                source_verified = False
-                for n in updated_nodes:
-                    if n["id"] == source_id and n["status"] == "verified":
-                        source_verified = True
-                        break
+                source_verified = source_id in all_verified_ids
 
                 if source_verified:
                     for n in updated_nodes:

@@ -199,13 +199,19 @@ def cmd_validate(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     return 0
 
 def cmd_snapshot(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.modules.context import ContextRegistry
     root = Path(args.root).resolve()
-    # Find script path relative to this script's directory
-    script_dir = Path(__file__).resolve().parent
-    command = [sys.executable, str(script_dir / "compact_memory.py")]
+    registry = ContextRegistry(str(root))
+    snapshot = registry.build_snapshot(paths=["."])
     if args.write:
-        command.append("--write")
-    return subprocess.run(command, cwd=str(root), check=False).returncode
+        snapshot_file = config.snapshot_file
+        snapshot_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(snapshot_file, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f, indent=2, ensure_ascii=False)
+        print(f"Snapshot successfully written to {snapshot_file.relative_to(root)}")
+    else:
+        print(json.dumps(snapshot, indent=2, ensure_ascii=False))
+    return 0
 
 def cmd_quantize(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     from memory_os.toolkit.quantizer import calculate_score, resolve_profile
@@ -269,7 +275,7 @@ def cmd_export_skills(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 def cmd_compress(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     root = Path(args.root).resolve()
     compactor = MemoryCompactor(config)
-    return compactor.compress_graph(provider=args.provider, model=args.model)
+    return compactor.compress_graph(provider=args.provider, model=args.model, dry_run=args.dry_run)
 
 def cmd_prune(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     root = Path(args.root).resolve()
@@ -909,10 +915,20 @@ def cmd_giant_scan(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 def cmd_daemon(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     import subprocess
     import signal
+    import urllib.request
     root = Path(args.root).resolve()
     data_dir = root / "data"
     pid_file = data_dir / "daemon.pid"
     
+    def send_daemon_request(port: int, path: str, method: str = "GET") -> Optional[dict]:
+        url = f"http://127.0.0.1:{port}{path}"
+        req = urllib.request.Request(url, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return None
+
     if args.daemon_action == "start":
         if pid_file.exists():
             print("Daemon is already running (PID file exists).")
@@ -926,6 +942,13 @@ def cmd_daemon(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         return 0
         
     elif args.daemon_action == "stop":
+        # First try to stop gracefully via HTTP IPC
+        port = config.daemon_port
+        res = send_daemon_request(port, "/stop", method="POST")
+        if res and res.get("status") == "stopping":
+            print("Daemon stopped gracefully via IPC.")
+            return 0
+            
         if not pid_file.exists():
             print("Daemon is not running.")
             return 1
@@ -939,12 +962,59 @@ def cmd_daemon(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         return 0
         
     elif args.daemon_action == "status":
-        if pid_file.exists():
-            print(f"Daemon is RUNNING (PID {pid_file.read_text().strip()})")
+        port = config.daemon_port
+        res = send_daemon_request(port, "/status")
+        if res:
+            print(f"Daemon is RUNNING (PID {res.get('pid')})")
+            print("\nDaemon Details (via IPC):")
+            print(f"  Last Activity : {res.get('last_activity_time', 'N/A')}")
+            print(f"  Last Ingestion: {res.get('last_ingestion_time', 'N/A')}")
+            err = res.get('last_ingestion_error')
+            if err:
+                print(f"  Last Ingestion Error: {err} (at {res.get('last_ingestion_error_time', 'N/A')})")
+            print(f"  Watched File  : {res.get('config', {}).get('transcript_path', 'N/A')}")
+            print(f"  IPC Port      : {res.get('config', {}).get('daemon_port', 'N/A')}")
             return 0
+
+        # Fallback if IPC unreachable
+        status_file = data_dir / "daemon_status.json"
+        is_running = False
+        pid = None
+        if pid_file.exists():
+            try:
+                pid = int(pid_file.read_text().strip())
+                os.kill(pid, 0)
+                is_running = True
+            except OSError:
+                pass
+                
+        if is_running:
+            print(f"Daemon is RUNNING (PID {pid})")
         else:
             print("Daemon is STOPPED")
-            return 1
+            
+        if status_file.exists():
+            try:
+                status_data = json.loads(status_file.read_text(encoding="utf-8"))
+                print("\nDaemon Details (fallback):")
+                print(f"  Last Activity : {status_data.get('last_activity_time', 'N/A')}")
+                print(f"  Last Ingestion: {status_data.get('last_ingestion_time', 'N/A')}")
+                err = status_data.get('last_ingestion_error')
+                if err:
+                    print(f"  Last Ingestion Error: {err} (at {status_data.get('last_ingestion_error_time', 'N/A')})")
+                print(f"  Watched File  : {status_data.get('config', {}).get('transcript_path', 'N/A')}")
+            except Exception as e:
+                print(f"  Could not read status file: {e}")
+        return 0 if is_running else 1
+
+    elif args.daemon_action == "sync":
+        port = config.daemon_port
+        res = send_daemon_request(port, "/sync", method="POST")
+        if res and res.get("status") == "sync_triggered":
+            print("Daemon sync triggered successfully via IPC.")
+            return 0
+        print("Could not contact daemon via IPC. Is the daemon running?")
+        return 1
     return 0
 
 def cmd_run_daemon_blocking(args: argparse.Namespace, config: MemoryOSConfig) -> int:
@@ -1049,6 +1119,99 @@ def cmd_linear_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     success = sync_roadmap_with_linear(root_dir)
     return 0 if success else 1
 
+def cmd_doctor(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    import sqlite3
+    root = Path(args.root).resolve()
+    print("=== Memory OS Diagnostics (doctor) ===\n")
+    
+    ok = True
+    
+    # 1. Config Check
+    config_file = root / "memory_os.config.json"
+    if config_file.exists():
+        print(f"  [✓] Config file: Found at {config_file.relative_to(root)}")
+    else:
+        print("  [!] Config file: Missing! Using default developer profile.")
+        
+    # 2. Directories Check
+    dirs = ["memory", "agent_context", "workflows"]
+    for d in dirs:
+        dp = root / d
+        if dp.exists() and dp.is_dir():
+            print(f"  [✓] Directory '{d}': Exists")
+        else:
+            print(f"  [✗] Directory '{d}': Missing!")
+            ok = False
+            
+    # 3. Core Files Check
+    files = [
+        ("nodes.jsonl", config.memory_dir / "nodes.jsonl"),
+        ("edges.jsonl", config.memory_dir / "edges.jsonl"),
+        ("events.jsonl", config.memory_dir / "events.jsonl"),
+        ("task_capsules.jsonl", config.capsules_file),
+    ]
+    for name, path in files:
+        if path.exists():
+            print(f"  [✓] File '{name}': Exists ({path.stat().st_size} bytes)")
+        else:
+            print(f"  [✗] File '{name}': Missing!")
+            ok = False
+            
+    # 4. Database Check
+    db_path = config.db_path
+    if db_path.exists():
+        print(f"  [✓] SQLite DB: Found at {db_path.relative_to(root)}")
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cur = conn.cursor()
+            
+            cur.execute("SELECT COUNT(*) FROM graph_nodes WHERE valid_to IS NULL")
+            nodes_count = cur.fetchone()[0]
+            
+            cur.execute("SELECT COUNT(*) FROM memory_os_telemetry")
+            telemetry_count = cur.fetchone()[0]
+            
+            print(f"      - Active nodes in SQLite: {nodes_count}")
+            print(f"      - Telemetry records: {telemetry_count}")
+            conn.close()
+        except Exception as e:
+            print(f"  [✗] SQLite DB connection error: {e}")
+            ok = False
+    else:
+        print("  [✗] SQLite DB: Missing!")
+        ok = False
+        
+    # 5. API Keys Check (Secrets Shield!)
+    keys = ["GEMINI_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"]
+    present_keys = [k for k in keys if os.environ.get(k)]
+    if present_keys:
+        print(f"  [✓] LLM API Keys configured: {', '.join(present_keys)}")
+    else:
+        print("  [!] LLM API Keys: None found in environment! (Background calls will fail)")
+        
+    # 6. Daemon Status Check
+    pid_file = root / "data" / "daemon.pid"
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            try:
+                os.kill(pid, 0)
+                print(f"  [✓] Background Daemon: RUNNING (PID {pid})")
+            except OSError:
+                print(f"  [!] Background Daemon: PID file exists ({pid}) but process is dead.")
+        except Exception as e:
+            print(f"  [!] Background Daemon: Error checking PID file: {e}")
+    else:
+        print("  [ ] Background Daemon: STOPPED")
+        
+    print("")
+    if ok:
+        print("Doctor diagnostics: ALL CRITICAL PATHS OK")
+        return 0
+    else:
+        print("Doctor diagnostics: CRITICAL PATH ERRORS FOUND! Run 'memory_os init' to resolve.")
+        return 1
+
 
 class _CleanHelpFormatter(argparse.HelpFormatter):
     """Hides subcommands registered with help=argparse.SUPPRESS."""
@@ -1130,6 +1293,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compress_parser.add_argument("--provider", help="Optional provider override (gemini, openrouter, openai)")
     compress_parser.add_argument("--model", help="Optional model override")
+    compress_parser.add_argument("--dry-run", action="store_true", help="Show what would be merged without writing.")
     compress_parser.set_defaults(func=cmd_compress)
 
     prune_parser = subparsers.add_parser(
@@ -1199,7 +1363,7 @@ def build_parser() -> argparse.ArgumentParser:
     persona_parser.set_defaults(func=cmd_persona)
 
     daemon_parser = subparsers.add_parser("daemon", help=argparse.SUPPRESS)
-    daemon_parser.add_argument("daemon_action", choices=["start", "stop", "status"])
+    daemon_parser.add_argument("daemon_action", choices=["start", "stop", "status", "sync"])
     daemon_parser.add_argument("--log-file")
     daemon_parser.set_defaults(func=cmd_daemon)
 
@@ -1260,6 +1424,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     linear_parser = subparsers.add_parser("linear-sync", help=argparse.SUPPRESS)
     linear_parser.set_defaults(func=cmd_linear_sync)
+
+    doctor_parser = subparsers.add_parser("doctor", help="Check system dependencies, files, DB, and environment.")
+    doctor_parser.set_defaults(func=cmd_doctor)
 
 
     return parser

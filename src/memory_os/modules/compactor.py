@@ -446,17 +446,20 @@ class MemoryCompactor:
         # Rebuild snapshot
         logger.info("Updating memory snapshot...")
         try:
-            import subprocess
-            # Rebuild snapshot relative to config
-            compact_memory_script = self.config.root_dir / "scripts" / "compact_memory.py"
-            if self.storage.exists(compact_memory_script):
-                subprocess.run([sys.executable, str(compact_memory_script), "--write"], check=True)
+            from memory_os.modules.context import ContextRegistry
+            registry = ContextRegistry(str(self.config.root_dir))
+            snapshot = registry.build_snapshot(paths=["."])
+            snapshot_file = self.config.snapshot_file
+            snapshot_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(snapshot_file, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, indent=2, ensure_ascii=False)
+            logger.info(f"Snapshot successfully written to {snapshot_file}")
         except Exception as exc:
             logger.error(f"Warning: snapshot rebuild failed: {exc}")
 
         return 0
 
-    def compress_graph(self, provider: Optional[str] = None, model: Optional[str] = None) -> int:
+    def compress_graph(self, provider: Optional[str] = None, model: Optional[str] = None, dry_run: bool = False) -> int:
         nodes_path = self.config.memory_dir / "nodes.jsonl"
         edges_path = self.config.memory_dir / "edges.jsonl"
         events_path = self.config.memory_dir / "events.jsonl"
@@ -498,9 +501,25 @@ class MemoryCompactor:
         if isinstance(payload, dict):
             proposed_nodes = payload.get("nodes", [])
             proposed_edges = payload.get("edges", [])
-        
+
         if not proposed_nodes and not proposed_edges:
             logger.info("LLM did not propose any compressions. Graph is already optimal.")
+            return 0
+
+        # 3-critic panel — same quality bar as compact_capsules
+        surviving_nodes, critic_votes = self._panel_vote(proposed_nodes, provider, model)
+        if proposed_nodes and not surviving_nodes:
+            logger.info("CriticPanel: all compression proposals rejected. Graph is already optimal.")
+            return 0
+        proposed_nodes = surviving_nodes
+
+        if dry_run:
+            logger.info(f"[dry-run] Would merge {len(proposed_nodes)} node(s):")
+            for n in proposed_nodes:
+                logger.info(f"  + {n.get('id')}  ({n.get('type')})  {n.get('summary', '')[:80]}")
+            logger.info(f"[dry-run] Would append {len(proposed_edges)} override edge(s):")
+            for e in proposed_edges:
+                logger.info(f"  {e.get('source')} --{e.get('type')}--> {e.get('target')}")
             return 0
 
         existing_edges = self._load_jsonl(edges_path)
@@ -514,6 +533,16 @@ class MemoryCompactor:
 
         for line in gate_report.summary_lines():
             logger.info(line)
+
+        # Pre-compute existing edge set for dedup
+        existing_edge_keys: Set[tuple] = {
+            (e.get("source"), e.get("target"), e.get("type")) for e in existing_edges
+        }
+
+        try:
+            rel_capsules = str(self.config.capsules_file.relative_to(self.config.root_dir))
+        except ValueError:
+            rel_capsules = "agent_context/task_capsules.jsonl"
 
         for verdict in gate_report.rejected:
             rejected_id = verdict.node.get("id", "unknown")
@@ -529,17 +558,38 @@ class MemoryCompactor:
                 "reason": verdict.reason,
             })
 
-        new_node_ids = set()
+        # Log critic votes to events
+        for vote in critic_votes:
+            self._append_jsonl(events_path, {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "event": "memory.critic.vote",
+                "node_id": vote.get("node_id", "unknown"),
+                "claim": vote.get("reason", ""),
+                "evidence": [],
+                "validator": f"critic_{vote.get('critic_index', '?')}",
+                "status": "accepted" if vote.get("verdict") == "approve" else "rejected",
+            })
+
+        new_node_ids: Set[str] = set()
         node_append_count = 0
         edge_append_count = 0
 
         for node in gate_report.accepted:
             node_id = node.get("id")
+
+            # Clean evidence: keep only paths that exist on disk
+            evidence = node.get("evidence", [])
+            cleaned_evidence = [fp for fp in evidence if (self.config.root_dir / fp).exists()]
+            seen: Set[str] = set()
+            cleaned_evidence = [fp for fp in cleaned_evidence if not (fp in seen or seen.add(fp))]
+            if not cleaned_evidence:
+                cleaned_evidence = [rel_capsules]
+
             new_node = {
                 "id": node_id,
                 "type": node.get("type", "rule"),
                 "summary": node.get("summary", ""),
-                "evidence": node.get("evidence", []),
+                "evidence": cleaned_evidence,
                 "status": "draft",
                 "freshness": datetime.now().isoformat(timespec="seconds"),
                 "trust": "unverified",
@@ -565,8 +615,13 @@ class MemoryCompactor:
             })
 
         for edge in proposed_edges:
+            key = (edge.get("source"), edge.get("target"), edge.get("type"))
+            if key in existing_edge_keys:
+                logger.info(f"Skipping duplicate edge: {key[0]} --{key[2]}--> {key[1]}")
+                continue
             if edge.get("source") in new_node_ids and edge.get("target") in existing_node_ids:
                 self._append_jsonl(edges_path, edge)
+                existing_edge_keys.add(key)
                 edge_append_count += 1
                 logger.info(f"Appended compression edge: {edge['source']} -> {edge['target']} ({edge['type']})")
 
@@ -582,10 +637,14 @@ class MemoryCompactor:
 
             logger.info("Updating memory snapshot...")
             try:
-                import subprocess
-                compact_memory_script = self.config.root_dir / "scripts" / "compact_memory.py"
-                if self.storage.exists(compact_memory_script):
-                    subprocess.run([sys.executable, str(compact_memory_script), "--write"], check=True)
+                from memory_os.modules.context import ContextRegistry
+                registry = ContextRegistry(str(self.config.root_dir))
+                snapshot = registry.build_snapshot(paths=["."])
+                snapshot_file = self.config.snapshot_file
+                snapshot_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(snapshot_file, "w", encoding="utf-8") as f:
+                    json.dump(snapshot, f, indent=2, ensure_ascii=False)
+                logger.info(f"Snapshot successfully written to {snapshot_file}")
             except Exception as exc:
                 logger.error(f"Warning: snapshot rebuild failed: {exc}")
 
