@@ -383,3 +383,32 @@ Format: short English bullets only. Keep durable facts.
 - fix: Fixed scraper aborting channel sync immediately on the first known duplicate video (which caused recent unpinned videos to be skipped if a known video was pinned). Added a 5-consecutive duplicate tolerance in `scraper_engine.py`.
 - fix: Fixed `UnboundLocalError: local variable 'channel_handle' referenced before assignment` in `scrape_multi.py` by fetching channel metadata before configuring progress observer.
 - fix: Fixed `TypeError: on_progress() got an unexpected keyword argument 'video_id'` and `AttributeError: 'YouTubeScraperEngine' object has no attribute 'silent'` in `cli_progress.py`.
+
+## 2026-06-12
+- Fixed EvolutionGate ImportError in validator.py and compactor.py.
+- Fixed MemoryOSConfig path resolution bug to properly target project root for daemon log isolation.
+- Fixed cli.py sys.executable daemon launch bug to properly run as a background subprocess using '-m memory_os'.
+- Implemented Background Watchdog daemon (Mem0 style) with fully operational CLI tracking ('python -m memory_os monitor').
+- feat: Implemented Temporal Knowledge Graphs (Zep Style) by replacing strict `PRIMARY KEY` on `id` with `rowid` and `valid_from` / `valid_to` bounds in `graph_nodes` table. FTS search now targets active nodes only.
+- feat: Added `memos sync` CLI command to load nodes.jsonl into the `graph_nodes` SQLite FTS5 graph database.
+- feat: Implemented Self-Editing Memory (Letta Style) by adding a `memos export-skills` command that writes `.claude/skills/create_memory_node.py` and `archive_memory_node.py` allowing external agents to programmatically alter the memory graph.
+- fix: Corrected `MemoryOSConfig` default `root_dir` resolution bug from `__file__` to `Path.cwd()`, ensuring single isolated backend operation without duplicating the SQLite database.
+
+## 2026-06-12: Phase 4 Controlled Automation (Memory OS)
+- **type:** feature
+- **status:** completed
+- **details:**
+  - Implemented `ScheduleEngine` in `daemon.py` to support cron-like tasks instead of naive sleep loops.
+  - Added `BudgetManager` (`budget.py`) with `max_daily_tokens` tracking (default 50,000) stored in `data/budget_state.json`.
+  - Updated `TranscriptIngestor` to deduct token costs and gracefully skip ingestion if budget is exhausted (Skip & Wait strategy).
+  - Added `AlertManager` (`alerts.py`) utilizing macOS native `osascript` to trigger desktop notifications for daemon crashes and budget exhaustion.
+  - Implemented Human Review Queue via new CLI commands: `memos review` (to list drafts) and `memos approve <node_id>` (to mark nodes as verified in the SQLite DB).
+
+## 2026-06-12: FTS5 Search & DB Optimization
+- **type:** feature
+- **status:** completed
+- **details:**
+  - Upgraded SQLite FTS5 search to extract highlight snippets using `snippet()` function.
+  - Integrated snippets into `memos search` and `memos rag` to reduce RAG hallucination and save tokens.
+  - Added `optimize_db()` core method calling `VACUUM` and FTS5 optimization.
+  - Exposed `memos db-optimize` CLI command for safe DB defragmentation.

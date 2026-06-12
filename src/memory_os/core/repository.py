@@ -24,7 +24,8 @@ class MemoryRepository:
 
     def get_nodes(self) -> List[MemoryNode]:
         raw = self.storage.load_jsonl(self._get_nodes_path())
-        return [MemoryNode.from_dict(d) for d in raw]
+        internal_raw = self.storage.load_jsonl(self.config.internal_memory_dir / "nodes.jsonl")
+        return [MemoryNode.from_dict(d) for d in raw + internal_raw]
 
     def add_node(self, node: MemoryNode) -> None:
         self.storage.append_jsonl(self._get_nodes_path(), node.to_dict())
@@ -34,6 +35,22 @@ class MemoryRepository:
     def save_nodes(self, nodes: List[MemoryNode]) -> None:
         raw = [n.to_dict() for n in nodes]
         self.storage.save_jsonl(self._get_nodes_path(), raw)
+        self.sync_graph_nodes()
+
+    def sync_graph_nodes(self) -> None:
+        from memory_os.core.core import MemoryOS
+        db = MemoryOS(self.config)
+        nodes = self.get_nodes()
+        for n in nodes:
+            db.insert_graph_node(
+                node_id=n.id,
+                node_type=n.type,
+                summary=n.summary,
+                status=n.status,
+                freshness=n.freshness,
+                trust=n.trust,
+                tags=",".join(n.tags) if n.tags else None
+            )
 
     def get_edges(self) -> List[MemoryEdge]:
         raw = self.storage.load_jsonl(self._get_edges_path())

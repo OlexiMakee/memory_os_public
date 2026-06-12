@@ -248,8 +248,25 @@ def cmd_workflows(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 
 def cmd_compact(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     root = Path(args.root).resolve()
-    compactor = MemoryCompactor(config)
-    return compactor.compact_capsules(provider=args.provider, model=args.model)
+    from memory_os.toolkit.compact_capsules import compact_capsules
+    
+    compact_capsules(root, provider_override=args.provider, model_override=args.model)
+    return 0
+
+def cmd_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.core.repository import MemoryRepository
+    from memory_os.core.storage import FileSystemMemoryStorage
+    
+    repo = MemoryRepository(FileSystemMemoryStorage(), config)
+    repo.sync_graph_nodes()
+    print("Graph nodes successfully synced to SQLite FTS5.")
+    return 0
+
+def cmd_export_skills(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.toolkit.skills_exporter import export_claude_skills
+    root = Path(args.root).resolve()
+    export_claude_skills(root)
+    return 0
 
 def cmd_compress(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     root = Path(args.root).resolve()
@@ -320,10 +337,13 @@ def cmd_rag(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         
     formatted = []
     for r in results[:5]: # Take top 5 to save tokens
-        formatted.append({
+        node_data = {
             "id": r.get("id"),
             "summary": r.get("summary")
-        })
+        }
+        if "match_snippet" in r:
+            node_data["match_snippet"] = r["match_snippet"]
+        formatted.append(node_data)
         
     output_path = root / "agent_context" / "active_memory.yaml"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -401,6 +421,8 @@ def cmd_search(args: argparse.Namespace, config: MemoryOSConfig) -> int:
             for node in nodes:
                 print(f"\n[{node['id']}] ({node['type']})")
                 print(f"  Summary: {node['summary']}")
+                if "match_snippet" in node:
+                    print(f"  Snippet: {node['match_snippet']}")
                 print(f"  Status: {node['status']} | Trust: {node['trust']}")
                 if node.get("evidence"):
                     print(f"  Evidence: {', '.join(node['evidence'])}")
@@ -472,9 +494,137 @@ def cmd_giant_scan(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 
     return 0 if result.get("status") in ("success", "dry_run") else 1
 
+def cmd_daemon(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    import subprocess
+    import signal
+    root = Path(args.root).resolve()
+    data_dir = root / "data"
+    pid_file = data_dir / "daemon.pid"
+    
+    if args.daemon_action == "start":
+        if pid_file.exists():
+            print("Daemon is already running (PID file exists).")
+            return 1
+            
+        transcript_path = args.log_file or str(root / "agent_context" / "transcript.jsonl")
+        
+        command = [sys.executable, "-m", "memory_os", "--root", str(root), "_run_daemon_blocking", str(transcript_path)]
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        print(f"Daemon started with PID {process.pid}. Run 'python -m memory_os monitor' to view logs.")
+        return 0
+        
+    elif args.daemon_action == "stop":
+        if not pid_file.exists():
+            print("Daemon is not running.")
+            return 1
+        pid = int(pid_file.read_text().strip())
+        try:
+            os.kill(pid, signal.SIGTERM)
+            print(f"Sent SIGTERM to daemon (PID {pid}).")
+        except ProcessLookupError:
+            print("Process not found, cleaning up stale PID file.")
+            pid_file.unlink()
+        return 0
+        
+    elif args.daemon_action == "status":
+        if pid_file.exists():
+            print(f"Daemon is RUNNING (PID {pid_file.read_text().strip()})")
+            return 0
+        else:
+            print("Daemon is STOPPED")
+            return 1
+    return 0
+
+def cmd_run_daemon_blocking(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.core.daemon import MemoryDaemon
+    root = Path(args.root).resolve()
+    transcript_path = Path(args.log_file).resolve()
+    daemon = MemoryDaemon(config, transcript_path)
+    daemon.run()
+    return 0
+
+def cmd_review(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.core.core import MemoryOS
+    from memory_os.core.models import MemoryNode
+    db = MemoryOS(config)
+    conn = db.get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, type, summary FROM graph_nodes WHERE valid_to IS NULL AND status = 'draft'")
+        drafts = cursor.fetchall()
+        if not drafts:
+            print("No draft nodes pending review in SQLite.")
+            return 0
+            
+        print(f"Found {len(drafts)} nodes pending review:")
+        for row in drafts:
+            print(f"[{row['id']}] ({row['type']}) - {row['summary']}")
+        return 0
+    finally:
+        conn.close()
+
+def cmd_approve(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.core.core import MemoryOS
+    db = MemoryOS(config)
+    conn = db.get_connection()
+    node_id = args.node_id
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM graph_nodes WHERE id = ? AND valid_to IS NULL AND status = 'draft'", (node_id,))
+        if not cursor.fetchone():
+            print(f"Node {node_id} is either not found, not active, or not in 'draft' status.")
+            return 1
+            
+        conn.execute("UPDATE graph_nodes SET status = 'verified', trust = 'verified' WHERE id = ? AND valid_to IS NULL", (node_id,))
+        conn.commit()
+        print(f"Node {node_id} successfully approved and marked as verified.")
+        return 0
+    except Exception as e:
+        print(f"Failed to approve node {node_id}: {e}")
+        return 1
+    finally:
+        conn.close()
+
+def cmd_db_optimize(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.core.core import MemoryOS
+    db = MemoryOS(config)
+    print("Optimizing database... This may take a moment depending on DB size.")
+    try:
+        db.optimize_db()
+        print("Database successfully optimized and vacuumed.")
+        return 0
+    except Exception as e:
+        print(f"Failed to optimize database: {e}")
+        return 1
+
+def cmd_monitor(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    import time
+    root = Path(args.root).resolve()
+    log_file = root / "data" / "daemon.log"
+    
+    if not log_file.exists():
+        print(f"Log file {log_file} does not exist yet. Is the daemon running?")
+        return 1
+        
+    print(f"Tailing {log_file}... (Press Ctrl+C to stop)")
+    with open(log_file, "r", encoding="utf-8") as f:
+        if not getattr(args, 'all', False):
+            f.seek(0, 2)
+        try:
+            while True:
+                line = f.readline()
+                if not line:
+                    time.sleep(0.5)
+                    continue
+                print(line, end="")
+        except KeyboardInterrupt:
+            print("\nMonitor stopped.")
+    return 0
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Memory OS project-local CLI.")
-    parser.add_argument("--root", default=str(ROOT), help="Project root")
+    parser.add_argument("--root", default=".", help="Project root")
     parser.add_argument("--config", help="Path to memory_os.config.json file")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -516,6 +666,18 @@ def build_parser() -> argparse.ArgumentParser:
     compact_parser.add_argument("--provider", help="Optional provider override (gemini, openrouter, openai)")
     compact_parser.add_argument("--model", help="Optional model override")
     compact_parser.set_defaults(func=cmd_compact)
+
+    sync_parser = subparsers.add_parser(
+        "sync",
+        help="Sync JSONL memory nodes to SQLite FTS5 graph database.",
+    )
+    sync_parser.set_defaults(func=cmd_sync)
+
+    export_skills_parser = subparsers.add_parser(
+        "export-skills",
+        help="Export Memory OS write-skills for Claude Code to .claude/skills/ directory.",
+    )
+    export_skills_parser.set_defaults(func=cmd_export_skills)
 
     compress_parser = subparsers.add_parser(
         "compress",
@@ -602,6 +764,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     persona_parser.set_defaults(func=cmd_persona)
 
+    daemon_parser = subparsers.add_parser("daemon", help="Manage the background memory ingestion daemon.")
+    daemon_parser.add_argument("daemon_action", choices=["start", "stop", "status"], help="Action to perform.")
+    daemon_parser.add_argument("--log-file", help="Path to transcript.jsonl (defaults to agent_context/transcript.jsonl)")
+    daemon_parser.set_defaults(func=cmd_daemon)
+
+    monitor_parser = subparsers.add_parser("monitor", help="Monitor real-time logs of the background daemon.")
+    monitor_parser.add_argument("--all", action="store_true", help="Show full history instead of tailing from end.")
+    monitor_parser.set_defaults(func=cmd_monitor)
+
+    internal_daemon_parser = subparsers.add_parser("_run_daemon_blocking", help=argparse.SUPPRESS)
+    internal_daemon_parser.add_argument("log_file")
+    internal_daemon_parser.set_defaults(func=cmd_run_daemon_blocking)
+
+    review_parser = subparsers.add_parser("review", help="List all draft memory nodes pending human review.")
+    review_parser.set_defaults(func=cmd_review)
+    
+    approve_parser = subparsers.add_parser("approve", help="Approve a draft memory node and mark it as verified.")
+    approve_parser.add_argument("node_id", help="ID of the draft node to approve.")
+    approve_parser.set_defaults(func=cmd_approve)
+
+    db_optimize_parser = subparsers.add_parser("db-optimize", help="Optimize FTS5 indexes and VACUUM the database.")
+    db_optimize_parser.set_defaults(func=cmd_db_optimize)
+
     return parser
 
 def main() -> int:
@@ -617,7 +802,11 @@ def main() -> int:
             
     if config_path:
         os.environ["MEMORY_OS_CONFIG_PATH"] = config_path
+    else:
+        # Default to current working directory if no root or config given
+        config_path = str(Path.cwd() / "memory_os.config.json")
         
+    config = MemoryOSConfig(config_path)
     return args.func(args, config)
 
 if __name__ == "__main__":

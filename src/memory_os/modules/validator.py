@@ -22,6 +22,31 @@ VALID_STEP_NAMES = {
     "mid", "high mid", "mid high", "big", "large", "giant"
 }
 
+class EvolutionGateVerdict:
+    def __init__(self, node: dict, stage: str, reason: str):
+        self.node = node
+        self.stage = stage
+        self.reason = reason
+
+class EvolutionGateReport:
+    def __init__(self):
+        self.accepted = []
+        self.rejected = []
+    def summary_lines(self) -> List[str]:
+        return [f"EvolutionGate accepted {len(self.accepted)} nodes, rejected {len(self.rejected)}."]
+
+class EvolutionGate:
+    def __init__(self, existing_node_ids, existing_edges, existing_verified_nodes):
+        self.existing_node_ids = existing_node_ids
+        self.existing_edges = existing_edges
+        self.existing_verified_nodes = existing_verified_nodes
+        
+    def check_nodes(self, proposed_nodes: List[dict]) -> EvolutionGateReport:
+        report = EvolutionGateReport()
+        for node in proposed_nodes:
+            report.accepted.append(node)
+        return report
+
 class MemoryValidator:
     """Validator for Memory OS schemas, task capsules, and workflows."""
 

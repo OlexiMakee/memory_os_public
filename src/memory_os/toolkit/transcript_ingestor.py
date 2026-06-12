@@ -11,7 +11,9 @@ from typing import List, Dict, Any, Optional
 
 from memory_os.core.config import MemoryOSConfig
 from memory_os.core.llm_service import DefaultLlmProviderService
-from memory_os.toolkit.prompt_formatter import wrap_in_xml
+from memory_os.core.prompt_formatter import wrap_in_xml
+from memory_os.core.budget import BudgetManager
+from memory_os.core.alerts import AlertManager
 
 PROMPT_TEMPLATE = """
 You are a Memory OS agent observing a developer's AI IDE session transcript.
@@ -38,6 +40,8 @@ class TranscriptIngestor:
     def __init__(self, config: MemoryOSConfig):
         self.config = config
         self.llm = DefaultLlmProviderService()
+        self.budget = BudgetManager(config)
+        self.alerts = AlertManager(config)
 
     def parse_transcript(self, transcript_path: Path, max_lines: int = 200) -> str:
         """Reads transcript.jsonl and builds a readable conversation log."""
@@ -67,11 +71,19 @@ class TranscriptIngestor:
 
     def ingest(self, transcript_path: Path, provider: Optional[str] = None, model: Optional[str] = None) -> List[Dict[str, Any]]:
         """Parses the transcript, extracts capsules via LLM, and appends to task_capsules.jsonl."""
+        if self.budget.is_budget_exhausted():
+            self.alerts.send_alert("Memory OS Budget Exhausted", "TranscriptIngestor skipped because max_daily_tokens was reached.", is_critical=True)
+            return []
+
         transcript_text = self.parse_transcript(transcript_path)
         if not transcript_text:
             return []
             
         prompt = PROMPT_TEMPLATE.replace("{{TRANSCRIPT}}", transcript_text)
+        
+        # Estimate token cost (rough heuristic: 1 token = 4 chars)
+        estimated_cost = len(prompt) // 4
+        self.budget.add_usage(estimated_cost)
         
         result_text = self.llm.generate(
             prompt=prompt,

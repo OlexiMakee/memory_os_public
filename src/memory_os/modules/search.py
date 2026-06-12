@@ -106,9 +106,9 @@ class MemorySearcher:
         matched_node_ids = set()
         nodes_by_id = {}
         try:
-            # Load all nodes into memory for traversal (could be optimized further in Phase 6)
+            # Load all active nodes into memory for traversal
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM graph_nodes")
+            cursor.execute("SELECT * FROM graph_nodes WHERE valid_to IS NULL")
             for row in cursor.fetchall():
                 d = dict(row)
                 d["evidence"] = [] # SQLite doesn't store array, we'll just mock it or fetch from JSONL if needed
@@ -116,17 +116,32 @@ class MemorySearcher:
             
             # Fast search via SQLite FTS5 Match
             # Note: We query the graph_nodes_fts virtual table for efficient full-text indexing
+            # Join with graph_nodes to ensure we only return active nodes
+            # We use snippet() to extract the exact match context for RAG
             cursor.execute("""
-                SELECT id FROM graph_nodes_fts 
-                WHERE graph_nodes_fts MATCH ?
+                SELECT f.id, snippet(graph_nodes_fts, -1, '<b>', '</b>', '...', 64) AS match_snippet 
+                FROM graph_nodes_fts f
+                JOIN graph_nodes n ON f.rowid = n.rowid
+                WHERE f.graph_nodes_fts MATCH ? AND n.valid_to IS NULL
             """, (query,))
+            
+            snippets_by_id = {}
             for row in cursor.fetchall():
                 matched_node_ids.add(row["id"])
+                snippets_by_id[row["id"]] = row["match_snippet"]
+                
         finally:
             conn.close()
 
         all_matched_node_ids = self.traverse_graph(matched_node_ids, depth, nodes_by_id, edges)
-        matched_nodes = [nodes_by_id[nid] for nid in all_matched_node_ids if nid in nodes_by_id]
+        
+        matched_nodes = []
+        for nid in all_matched_node_ids:
+            if nid in nodes_by_id:
+                node_copy = dict(nodes_by_id[nid])
+                if nid in snippets_by_id:
+                    node_copy["match_snippet"] = snippets_by_id[nid]
+                matched_nodes.append(node_copy)
 
         # 2. Search codebase items
         items = snapshot.get("items", [])

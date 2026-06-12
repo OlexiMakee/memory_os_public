@@ -103,15 +103,24 @@ class MemoryOS:
             # Graph Nodes table for Memory OS Phase 5
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS graph_nodes (
-                    id TEXT PRIMARY KEY,
+                    id TEXT NOT NULL,
                     type TEXT NOT NULL,
                     summary TEXT NOT NULL,
                     status TEXT,
                     freshness TEXT,
                     trust TEXT,
-                    tags TEXT
+                    tags TEXT,
+                    valid_from TEXT DEFAULT (datetime('now', 'localtime')),
+                    valid_to TEXT
                 )
             """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_nodes_id ON graph_nodes(id)")
+            try:
+                conn.execute("ALTER TABLE graph_nodes ADD COLUMN valid_from TEXT DEFAULT (datetime('now', 'localtime'))")
+                conn.execute("ALTER TABLE graph_nodes ADD COLUMN valid_to TEXT")
+            except sqlite3.OperationalError:
+                pass
+
             conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(type)")
             
             # FTS5 Virtual Table for graph_nodes
@@ -126,6 +135,7 @@ class MemoryOS:
             """)
             
             # Create triggers for graph_nodes_fts
+            # We index valid_from and valid_to as well, or just index the text, but the FTS match is for text search.
             conn.execute("""
                 CREATE TRIGGER IF NOT EXISTS graph_nodes_ai AFTER INSERT ON graph_nodes BEGIN
                     INSERT INTO graph_nodes_fts(rowid, id, type, summary)
@@ -159,6 +169,26 @@ class MemoryOS:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_performance_name ON memory_os_performance(algorithm_name)")
             
+            conn.commit()
+        finally:
+            conn.close()
+
+    def insert_graph_node(self, node_id: str, node_type: str, summary: str, status: Optional[str] = None, 
+                          freshness: Optional[str] = None, trust: Optional[str] = None, tags: Optional[str] = None) -> None:
+        """Insert a node into graph_nodes. Handles superseding previous nodes by id."""
+        conn = self.get_connection()
+        try:
+            # Check if exists and is currently valid
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM graph_nodes WHERE id = ? AND valid_to IS NULL", (node_id,))
+            if cursor.fetchone():
+                # Supersede the old one
+                conn.execute("UPDATE graph_nodes SET valid_to = datetime('now', 'localtime') WHERE id = ? AND valid_to IS NULL", (node_id,))
+            
+            conn.execute("""
+                INSERT INTO graph_nodes (id, type, summary, status, freshness, trust, tags)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (node_id, node_type, summary, status, freshness, trust, tags))
             conn.commit()
         finally:
             conn.close()
@@ -212,3 +242,22 @@ class MemoryOS:
             return [dict(row) for row in cursor.fetchall()]
         finally:
             conn.close()
+
+    def optimize_db(self) -> None:
+        """Optimize the FTS5 indexes and VACUUM the database to reduce fragmentation."""
+        conn = self.get_connection()
+        # VACUUM cannot be run inside a transaction
+        original_isolation = conn.isolation_level
+        conn.isolation_level = None
+        try:
+            # Optimize memories FTS table
+            conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('optimize')")
+            # Optimize graph_nodes FTS table
+            conn.execute("INSERT INTO graph_nodes_fts(graph_nodes_fts) VALUES('optimize')")
+            
+            # Rebuild DB, freeing up unused space
+            conn.execute("VACUUM")
+        finally:
+            conn.isolation_level = original_isolation
+            conn.close()
+

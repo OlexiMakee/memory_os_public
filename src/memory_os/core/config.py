@@ -17,8 +17,8 @@ class MemoryOSConfig(IMemoryOSConfig):
             if env_path:
                 self.config_path = Path(env_path).resolve()
             else:
-                # Default to project root memory_os.config.json
-                self.config_path = Path(__file__).resolve().parents[1] / "memory_os.config.json"
+                # Default to current working directory
+                self.config_path = Path.cwd() / "memory_os.config.json"
 
         self.root_dir = self.config_path.parent
         self.data = self._load_config()
@@ -35,7 +35,10 @@ class MemoryOSConfig(IMemoryOSConfig):
                 "workflows": ["product", "memory_os"],
                 "step_scale": "1..12",
                 "resource_mode": "normal",
-                "db_path": "memory/memory_os.db"
+                "db_path": "memory/memory_os.db",
+                "budget": {
+                    "max_daily_tokens": 50000
+                }
             }
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
@@ -54,7 +57,7 @@ class MemoryOSConfig(IMemoryOSConfig):
 
     @property
     def internal_memory_dir(self) -> Path:
-        return (self.root_dir / "memory_os" / "memory_graph").resolve()
+        return (Path(__file__).resolve().parent.parent / "memory_graph").resolve()
 
     @property
     def persona_memory_dir(self) -> Path:
