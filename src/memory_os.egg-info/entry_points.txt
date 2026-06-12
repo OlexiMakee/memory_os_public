@@ -1,2 +1,0 @@
-[console_scripts]
-memory_os = memory_os.cli:main
