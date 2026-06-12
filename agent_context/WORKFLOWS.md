@@ -4,15 +4,15 @@ Status: mandatory routing contract. Language: concise English.
 
 Use two explicit workstreams:
 - `product`: client-facing Governed Autonomous Intelligence Workspace.
-- `memos`: Memory OS, agent workflow, development telemetry, repo analysis, and self-improvement tools.
+- `memory_os`: Memory OS, agent workflow, development telemetry, repo analysis, and self-improvement tools.
 
-Naming guard: `memos` is an internal command/workflow alias for Memory OS. It is
+Naming guard: `memory_os` is an internal command/workflow alias for Memory OS. It is
 not the final public product name and is unrelated to the existing Memos
 note-taking application.
 
 Accepted trigger forms:
 - `product nano`, `product mid step`, `product 8`, `product giant steps`.
-- `memos nano`, `memos light mid`, `memos 6`, `memos giant`.
+- `memory_os nano`, `memory_os light mid`, `memory_os 6`, `memory_os giant`.
 - If no workflow is named, infer from the task. If inference is mixed, update `HANDSHAKE.md` and finish the smaller blocking side first.
 
 ## 12-Step Scale
@@ -92,7 +92,7 @@ Default constraints:
 - Separate durable rules from temporary handoff notes.
 
 Typical tasks by score:
-- 1 nano: add one handoff bullet; classify one task as product/memos.
+- 1 nano: add one handoff bullet; classify one task as product/memory_os.
 - 2 micro: compact one log snippet into a capsule draft.
 - 3 tiny: update one index pointer or one read-order line.
 - 4 little: add one workflow rule or one task capsule validation.
@@ -108,7 +108,7 @@ Typical tasks by score:
 ## Mixed Tasks
 
 When a task touches both workflows:
-- Split into `product` and `memos` subtasks in `HANDSHAKE.md`.
-- Do not hide product risk inside memos work.
-- Do not let memos refactors block a small product fix.
+- Split into `product` and `memory_os` subtasks in `HANDSHAKE.md`.
+- Do not hide product risk inside memory_os work.
+- Do not let memory_os refactors block a small product fix.
 - If the user asks for "next" with no workflow, prefer the currently blocking handoff item.

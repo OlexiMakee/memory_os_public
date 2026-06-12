@@ -22,11 +22,11 @@
   - `cli.main()` referenced undefined `config` → added `config = MemoryOSConfig()` before dispatch
   - `__main__.py` called `args.func(args)` without `config` → delegates to `cli.main()`
   - `lifecycle.transition()` processed `stale` nodes (re-promoted them) → now processes `draft` and `observed` only; `module_cluster` type added to allowed types
-- [x] Phase 4 Controlled Automation: `ScheduleEngine`, `BudgetManager`, `AlertManager`, Human Review Queue commands (`memos review`, `memos approve`).
+- [x] Phase 4 Controlled Automation: `ScheduleEngine`, `BudgetManager`, `AlertManager`, Human Review Queue commands (`memory_os review`, `memory_os approve`).
 - [x] Memory OS — FTS5 & Optimization:
   - Added `snippet()` extraction to FTS5 search.
-  - Updated `memos search` and `memos rag` to output snippets (isolated context).
-  - Added `optimize_db()` and `memos db-optimize` CLI command for SQLite defragmentation (`VACUUM`).
+  - Updated `memory_os search` and `memory_os rag` to output snippets (isolated context).
+  - Added `optimize_db()` and `memory_os db-optimize` CLI command for SQLite defragmentation (`VACUUM`).
 
 ## Blocked / Pending
 - [ ] Keep live DB migrations to the main scraped database blocked until explicit user confirmation.

@@ -70,8 +70,8 @@ Format: short English bullets only. Keep durable facts.
 - [ ] Basic role model (Reader, Analyst, Admin)
 
 **Handoff to Gemini (giant/12):** Memory OS repository audit, strategy consolidation, task-scale verification.
-- Timestamp: 2026-06-02T00:15:00Z (memos micro-steps batch #1 complete).
-- Payload: `scripts/memos.py audit` snapshot ready; workflows manifest valid; 131+ tests OK; Gemini entry criteria met.
+- Timestamp: 2026-06-02T00:15:00Z (memory_os micro-steps batch #1 complete).
+- Payload: `scripts/memory_os.py audit` snapshot ready; workflows manifest valid; 131+ tests OK; Gemini entry criteria met.
 - Exit criteria: first useful brief < 10 minutes, 3 pilot teams active
 - Admin-gated AI model listing, chat execution, and server-side chat context clearing.
 - Added route-level RBAC policy test coverage for protected and intentionally public endpoints.
@@ -130,10 +130,10 @@ Format: short English bullets only. Keep durable facts.
 - Added protected `/api/analytics/data-methods` method review endpoint, `POST /api/analytics/data-methods/review` snapshot trigger, and `method-review` snapshot CLI for scheduler/dashboard integration.
 - Added Operator Runtime Data Method Review panel with ranked method display and explicit admin snapshot run action.
 - Fixed thumbnail OCR Gemini fallback to avoid retired `gemini-1.5-flash`, support `GEMINI_OCR_MODEL`, and discover a `generateContent` Flash model after 404 model drift.
-- Split agent execution into `product` and `memos` workflows with a 12-step `nano` to `giant` scale.
+- Split agent execution into `product` and `memory_os` workflows with a 12-step `nano` to `giant` scale.
 - Added task capsule JSONL validator for required fields and optional workflow/step metadata.
 - Updated task capsule logging rule so new rows carry workflow and 12-step metadata.
-- Set next handoff target to `memos nano` for handoff-only Memory OS maintenance.
+- Set next handoff target to `memory_os nano` for handoff-only Memory OS maintenance.
 - Completed SOLID refactoring of AgentService in agent.py to delegate context composition, chat logging, and client interaction to supporting helper services.
 - Verified Phase 1 Governance Registry migration schemas and indexes.
 - Implemented Phase 1 Editorial MVP briefs generation, listing, details retrieval, and exports (Markdown/HTML/PDF) in briefs.py, registered briefs blueprint route handlers, and covered via test_briefs_generation.py.
@@ -159,10 +159,10 @@ Format: short English bullets only. Keep durable facts.
 - Added missing translation keys for `Add Governed Source` modal labels and action buttons across all five supported UI languages (UA, EN, ES, PT, TR) in `static/js/translations.js`.
 - Fixed validation loop continuation bug in `validate_memory.py` where a single node, edge, or event check failure would cause all remaining items in the file to be skipped, and added comprehensive unit test (131/131 tests passing).
 - Added Memory OS control-plane audit CLI for handoff, capsules, lifecycle files, roadmap status, and next recommendations.
-- Added portable `scripts/memos.py` CLI for project-local Memory OS init, integration, audit, validation, and snapshot operations.
-- Added dry-run-first method-review proposal generation, registered it in analytics and Memos CLIs, documented `memos` as an internal Memory OS alias, wrote the current empty method-review snapshot, and recorded the first lifecycle event.
-- Aligned the Memory OS task quantizer with the canonical 12-step workflow scale, added `memos quantize`, and updated TOML workflow specs with `step_min` / `step_max`.
-- Added workflow TOML manifest validation, integrated it into `memos validate` / `memos audit`, and generated `memory/workflow_manifest.json`.
+- Added portable `scripts/memory_os.py` CLI for project-local Memory OS init, integration, audit, validation, and snapshot operations.
+- Added dry-run-first method-review proposal generation, registered it in analytics and Memory OS CLIs, documented `memory_os` as an internal Memory OS alias, wrote the current empty method-review snapshot, and recorded the first lifecycle event.
+- Aligned the Memory OS task quantizer with the canonical 12-step workflow scale, added `memory_os quantize`, and updated TOML workflow specs with `step_min` / `step_max`.
+- Added workflow TOML manifest validation, integrated it into `memory_os validate` / `memory_os audit`, and generated `memory/workflow_manifest.json`.
 - Added generic phrase performance analytics for 1/2/3/4-gram scoring across arbitrary text records and numeric metrics, plus a YouTube SQLite CLI adapter.
 - Integrated phrase performance into `/api/charts`, preserving legacy chart keys while adding a richer `phrase_performance` block and removing the route dependency on `video_phrases`.
 - Implemented proposal metadata tags ('workflow' and 'role_tier') in the JSONL submission route with full validation and test coverage, avoiding physical module split overhead in Phase 1 (154/154 tests passing).
@@ -186,7 +186,7 @@ Format: short English bullets only. Keep durable facts.
 - Relocated widget close button (`.widget-remove-btn`) in ChannelAnalyticsWidget, AnomalyAlertsWidget, and DailyBriefWidget to be a direct child of the outer `.dashboard-widget` container to guarantee consistent absolute positioning in the top-right corner across different widget header configurations.
 - Updated `.cursorrules` and `agent_context/AGENT_RULES.md` behavior rules to allow running unit and integration tests autonomously without asking the user.
 - Extended python AST import parsing in `compact_memory.py` to extract full module paths and updated `search_memory.py` dependency traversal to match exact module imports for high-precision blast-radius estimation.
-- Implemented proposal auto-verification and transition check in `audit_memos.py` (`memos.py audit`), automatically marking completed admin proposals (such as `1780409787036`) as `"done"` and recording them in `events.jsonl` once verification conditions are satisfied.
+- Implemented proposal auto-verification and transition check in `audit_memory_os.py` (`memory_os.py audit`), automatically marking completed admin proposals (such as `1780409787036`) as `"done"` and recording them in `events.jsonl` once verification conditions are satisfied.
 - Automated proposal verification and transitions for theme addition (1780268042454) and language selection (1780268104255) by adding verified nodes to `nodes.jsonl` and writing unit tests `test_themes.py` and `test_languages.py` under `scratch/`.
 - Refactored `BaseStorage` in `news_scraper/db_client.py` into separate repository interfaces `IChannelRepository`, `IVideoRepository`, and `ISyncCoordinator` for SOLID Interface Segregation Principle (ISP) compliance, adding verification tests in `scratch/test_db_client_isp.py` with all 189/189 tests passing.
 - Fixed API merging logic inside the `/api/entities/aliases` endpoint in `app/routes/entities.py` to correctly merge references and counts if the alias exists as a canonical entity or alias, resolving all test failures (all 194 tests passing).
@@ -198,13 +198,13 @@ Format: short English bullets only. Keep durable facts.
 - Staged the "Healthy Development & Company-Mode Governance" proposal as draft ADR-005 under `knowledge_base/decisions/` and registered it in `decisions/INDEX.md`, explicitly documenting Owner override and intervention authority.
 - Clarified Owner override and intervention authority in `agent_context/AGENT_RULES.md` and `strategy.md` under the Autonomy section, ensuring the Owner retains full right to intervene in any workflow pipeline details where they possess specific expertise.
 - Corrected task capsule validation issue on line 46 by updating the step name value to its canonical form ("pretty little") in `agent_context/task_capsules.jsonl`.
-- Implemented the Proposal Metadata Contract validation under the `memos` workflow. Created JSON schema in `configs/schemas/proposal_schema.json` and integrated validators into `validate_memory.py`, `audit_memos.py`, and `memos.py validate`, with full unit tests in `scratch/test_proposal_validation.py` (all 199 tests passing).
+- Implemented the Proposal Metadata Contract validation under the `memory_os` workflow. Created JSON schema in `configs/schemas/proposal_schema.json` and integrated validators into `validate_memory.py`, `audit_memory_os.py`, and `memory_os.py validate`, with full unit tests in `scratch/test_proposal_validation.py` (all 199 tests passing).
 - Updated `agent_context/GLOBAL_ROADMAP.md` checking off completed SOLID and Phase 2 items (Saved Layouts, Micro-Widgets, Synchronized Filters, Entity Extraction, Alias Dictionary, Cross-Source Timeline, ISP Separation, and Proposal Metadata Contract).
 - Implemented Scheduler Binding (Option S1 - manual dashboard trigger button) for data method review proposals generation. Registered admin-gated `POST /api/analytics/data-methods/proposals` endpoint, added `generateMethodProposals` controller in `static/js/ui.js` and bound it globally in `static/js/app.js`, added "Proposals" button in the Operator panel of `templates/index.html`, wrote integration tests in `scratch/test_method_review_proposals_api.py`, checked off the roadmap item, and rebuilt the memory snapshot.
-- Implemented the Memory OS task capsule compactor. Created `scripts/memory/compact_capsules.py` which extracts permanent knowledge nodes and relationship edges from task capsules using LLM API calls in batches. Registered the `compact` subcommand in `scripts/memos.py`. Expanded lifecycle transition validation to support `connector`, `config`, and `policy` node types. Covered compaction logic with unit tests in `scratch/test_compact_capsules.py`, compacted the capsule backlog, and successfully validated memory state.
+- Implemented the Memory OS task capsule compactor. Created `scripts/memory/compact_capsules.py` which extracts permanent knowledge nodes and relationship edges from task capsules using LLM API calls in batches. Registered the `compact` subcommand in `scripts/memory_os.py`. Expanded lifecycle transition validation to support `connector`, `config`, and `policy` node types. Covered compaction logic with unit tests in `scratch/test_compact_capsules.py`, compacted the capsule backlog, and successfully validated memory state.
 - Aligned Memory OS architecture for dual-purpose operations. Separated Developer Memory OS (code index and task logs) from User-Facing Memory OS (dashboard-driven user facts and preferences stored in SQLite `data/memory_os.db`). Documented boundaries in `strategy.md` and `memory_os_architecture.md`. Added a Global Response Language Policy in `AGENT_RULES.md` and system prompts (`chief_editor_core.md`, `system_prompt.txt`, `system_instructions_user.txt`) to respond in the user's input language, block Russian generation, and respond to Russian in a random non-Russian language. Verified 203/203 tests passing.
 - Decoupled the Memory OS engine (validation, lifecycle, compaction, and search) from developer knowledge base flat-files, packaging it into `app/services/memory_os` library with dynamic configuration loading.
-- Refactored `scripts/memos.py` CLI and `scripts/memory/` scripts into thin delegating wrappers, preserving backwards compatibility and test harness configurations.
+- Refactored `scripts/memory_os.py` CLI and `scripts/memory/` scripts into thin delegating wrappers, preserving backwards compatibility and test harness configurations.
 - Verified package portability by running validation against an isolated mock User-OS configuration.
 - Ran the entire test suite and verified 203/203 green tests.
 - Conducted a repo-wide Memory OS control-plane audit and executed a staged graph rebuild.
@@ -231,7 +231,7 @@ Format: short English bullets only. Keep durable facts.
 - Integrated the interactive budget constraint optimizer, workflow dropdowns, cost/delay labels, and recommendation hints under Scraping Proposals in the Operator panel with multi-language translation.
 - Refactored and renamed the `news_scraper` namespace to the generic `scraper` namespace across all code modules, scripts, blueprints, entry points, configuration files, and unit test suites for SOLID compliance.
 - Pushed all refactoring and Phase 1 commits to GitHub under the release tag `v1.0.0-phase1-solid` after purging a temporary large file from local history.
-- Corrected outdated `news_scraper` references to `scraper` in `memory/nodes.jsonl` evidence fields to restore memos validation success.
+- Corrected outdated `news_scraper` references to `scraper` in `memory/nodes.jsonl` evidence fields to restore memory_os validation success.
 - Implemented User-Facing Memory OS likes/dislikes and optional comment feedback loop for streaming co-editor interactions, saving insights to isolated SQLite `data/memory_os.db` database.
 - Added client-side chat feedback controls (Thumbs-Up, Thumbs-Down, export to Markdown, and comment input fields) to bot message bubbles in the chat drawer.
 - Verified route and database persistence integration using a dedicated unit test suite (`scratch/test_chat_feedback.py`) and ran audit to automatically verify and transition the related proposals to done.
@@ -246,11 +246,11 @@ Format: short English bullets only. Keep durable facts.
 - Registered localized translations for the Cost & Quota widget across UA, EN, ES, PT, and TR.
 - Implemented `CostQuotaDashboardWidget` in `static/js/widgets.js` with dual tabs for LLM costs bar chart and system load line chart (CPU/RAM).
 - Wrote integration tests in `scratch/test_quota_dashboard.py` and verified all 230 tests pass successfully.
-- Extended the main `scripts/memos.py` CLI with `search`, `user-memory` (list, add, delete, search), and `context` commands for unified agent-centric memory management.
+- Extended the main `scripts/memory_os.py` CLI with `search`, `user-memory` (list, add, delete, search), and `context` commands for unified agent-centric memory management.
 - Updated `SystemPromptBuilder` to query User-OS memories and inject them into system prompts in clean YAML format, applying a strict filter to exclude developer codebase metadata (guaranteeing zero codebase leakage).
 - Added comprehensive unit tests in `scratch/test_memos_cli_extensions.py` achieving 100% code coverage across new subcommands and prompt filtering rules.
 - Implemented Phase 3 Audit Logging tracking critical source creation, deletion, credentials storage, briefs/videos exports, and scraper proposal approvals inside SQLite `audit_events`. Added unit/integration test coverage, resolving test process hijacking during db_exporter imports (all 239 tests passing).
-- Implemented Phase 3 Evidence & OSINT features: configured ingestion artifact store in `data/evidence_cache/` to download thumbnails and save metadata/transcripts with SHA-256 content hashes recorded in `governance.db`; generated daily brief verification seals dynamically verifying cached files on retrieval; registered admin-gated ZIP evidence bundle download route `/api/briefs/<brief_id>/evidence-bundle` and frontend handlers; added `memos retention` subcommand and database/file purge routine; wrote comprehensive test suite in `scratch/test_osint_evidence.py` verifying all operations (all 244 tests passing).
+- Implemented Phase 3 Evidence & OSINT features: configured ingestion artifact store in `data/evidence_cache/` to download thumbnails and save metadata/transcripts with SHA-256 content hashes recorded in `governance.db`; generated daily brief verification seals dynamically verifying cached files on retrieval; registered admin-gated ZIP evidence bundle download route `/api/briefs/<brief_id>/evidence-bundle` and frontend handlers; added `memory_os retention` subcommand and database/file purge routine; wrote comprehensive test suite in `scratch/test_osint_evidence.py` verifying all operations (all 244 tests passing).
 - Implemented Scheduled Watchers Configuration and Validation (Phase 4): created default `configs/watchers.config.json` listing example channels, intervals, and cost metrics; implemented `validate_watcher_config(payload)` in `app/services/governance.py` with validation bounds (e.g., minimum 15-minute crawl intervals to prevent rate limit overheating); covered with a dedicated unit test suite in `scratch/test_watchers_config.py` (all 253 tests passing).
 - Implemented Scheduled Watchers Execution Runner (Phase 4): created `execute_watchers(root_dir)` in `app/services/governance.py` that loads configurations, filters enabled watchers, validates their properties, runs mock/dry-run ingestions logging runs in `connector_runs` and audit logs in `audit_events` transactionally; covered with unit tests in `scratch/test_watchers_runner.py` (all 254 tests passing).
 
@@ -277,20 +277,20 @@ Format: short English bullets only. Keep durable facts.
 - Scripts import rewritten: `from app.services.memory_os` → `from memory_os` in 8 scripts.
 - `memory_os/pyproject.toml` created; zero external dependencies.
 - `memory_os/docs/ARCHITECTURE.md` created; portability instructions documented.
-- Compile check: all 17 modules clean. Shim backward-compat verified. `memos.py validate` runs.
+- Compile check: all 17 modules clean. Shim backward-compat verified. `memory_os.py validate` runs.
 - Portable: copy `memory_os/` + `memory_os.config.json` + `memory/` to any Python project; set API key env.
-- [A] Migrated evidence paths in `memory/nodes.jsonl`: `app/services/memory_os/X` → `memory_os/X`. `memos validate` now clean.
-- [B] Launchd agent registered: `com.newsresearch.memory_os.compact` runs `memos compact` daily at 03:00. Plist in `memory_os/`. Logs → `logs/memos_compact.log`.
+- [A] Migrated evidence paths in `memory/nodes.jsonl`: `app/services/memory_os/X` → `memory_os/X`. `memory_os validate` now clean.
+- [B] Launchd agent registered: `com.newsresearch.memory_os.compact` runs `memory_os compact` daily at 03:00. Plist in `memory_os/`. Logs → `logs/memos_compact.log`.
 - [C] Portability smoke passed via system python3 (no project venv): MemoryOS SQLite init, memory write/read, MemoryValidator, parse_toml, wrap_in_xml all verified from `/tmp` isolation.
 
 ## 2026-06-04
 
 - feat: Extracted Memory OS into a standalone portable package (`memory_os/`).
 - feat: Implemented Recursive Memory OS (graph isolates architecture vs project rules).
-- feat: Added semantic compaction (`memos compress`) and garbage collection (`memos prune`).
-- feat: Added YAML-based telemetry dashboard (`memos stats`).
-- feat: Added dynamic RAG context generation (`memos rag`).
-- feat: Isolated User Persona extraction to prevent system graph pollution (`memos persona-sync`).
+- feat: Added semantic compaction (`memory_os compress`) and garbage collection (`memory_os prune`).
+- feat: Added YAML-based telemetry dashboard (`memory_os stats`).
+- feat: Added dynamic RAG context generation (`memory_os rag`).
+- feat: Isolated User Persona extraction to prevent system graph pollution (`memory_os persona-sync`).
 - chore: Bumped virtual version to pre-alpha 0.998.
 - fix: Repaired and pruned legacy test suites in `scratch/` that were broken by the deep structural decoupling of `memory_os` from the host app, resulting in 190/190 passing tests.
 - feat: Refactored `quantizer.py` and workflows to use L0-L13 scale, added `IMemoryModule`, `WorkflowManager`, and `TaskOrchestrator` to support dynamic multi-agent orchestrations.
@@ -342,7 +342,7 @@ Format: short English bullets only. Keep durable facts.
 - fix: Reconnected source create/delete, credential storage, brief export, video export, anomaly alerts, and scraper proposal approval to governance audit logging.
 - fix: Restored admin quota/system metrics endpoints used by Cost/Quota and System Status widgets.
 - fix: Registered `scraper_bp` again so `/api/scraper/proposals/<id>/approve` is reachable.
-- fix: Normalized proposal workflow tagging to accept `memory_os` while keeping `memos` as a backward-compatible alias.
+- fix: Normalized proposal workflow tagging to accept `memory_os` while keeping `memory_os` as a backward-compatible alias.
 - verified: `venv_auto/bin/python -m unittest discover -s tests` passed (186/186).
 - verified: `venv_auto/bin/python -m unittest discover -s scratch -p 'test_*.py'` passed (6/6).
 - verified: `PYTHONPYCACHEPREFIX=/private/tmp/news_research_pycache venv_auto/bin/python -m compileall app scraper news_scraper tests scratch` passed.
@@ -390,8 +390,8 @@ Format: short English bullets only. Keep durable facts.
 - Fixed cli.py sys.executable daemon launch bug to properly run as a background subprocess using '-m memory_os'.
 - Implemented Background Watchdog daemon (Mem0 style) with fully operational CLI tracking ('python -m memory_os monitor').
 - feat: Implemented Temporal Knowledge Graphs (Zep Style) by replacing strict `PRIMARY KEY` on `id` with `rowid` and `valid_from` / `valid_to` bounds in `graph_nodes` table. FTS search now targets active nodes only.
-- feat: Added `memos sync` CLI command to load nodes.jsonl into the `graph_nodes` SQLite FTS5 graph database.
-- feat: Implemented Self-Editing Memory (Letta Style) by adding a `memos export-skills` command that writes `.claude/skills/create_memory_node.py` and `archive_memory_node.py` allowing external agents to programmatically alter the memory graph.
+- feat: Added `memory_os sync` CLI command to load nodes.jsonl into the `graph_nodes` SQLite FTS5 graph database.
+- feat: Implemented Self-Editing Memory (Letta Style) by adding a `memory_os export-skills` command that writes `.claude/skills/create_memory_node.py` and `archive_memory_node.py` allowing external agents to programmatically alter the memory graph.
 - fix: Corrected `MemoryOSConfig` default `root_dir` resolution bug from `__file__` to `Path.cwd()`, ensuring single isolated backend operation without duplicating the SQLite database.
 
 ## 2026-06-12: Phase 4 Controlled Automation (Memory OS)
@@ -402,13 +402,13 @@ Format: short English bullets only. Keep durable facts.
   - Added `BudgetManager` (`budget.py`) with `max_daily_tokens` tracking (default 50,000) stored in `data/budget_state.json`.
   - Updated `TranscriptIngestor` to deduct token costs and gracefully skip ingestion if budget is exhausted (Skip & Wait strategy).
   - Added `AlertManager` (`alerts.py`) utilizing macOS native `osascript` to trigger desktop notifications for daemon crashes and budget exhaustion.
-  - Implemented Human Review Queue via new CLI commands: `memos review` (to list drafts) and `memos approve <node_id>` (to mark nodes as verified in the SQLite DB).
+  - Implemented Human Review Queue via new CLI commands: `memory_os review` (to list drafts) and `memory_os approve <node_id>` (to mark nodes as verified in the SQLite DB).
 
 ## 2026-06-12: FTS5 Search & DB Optimization
 - **type:** feature
 - **status:** completed
 - **details:**
   - Upgraded SQLite FTS5 search to extract highlight snippets using `snippet()` function.
-  - Integrated snippets into `memos search` and `memos rag` to reduce RAG hallucination and save tokens.
+  - Integrated snippets into `memory_os search` and `memory_os rag` to reduce RAG hallucination and save tokens.
   - Added `optimize_db()` core method calling `VACUUM` and FTS5 optimization.
-  - Exposed `memos db-optimize` CLI command for safe DB defragmentation.
+  - Exposed `memory_os db-optimize` CLI command for safe DB defragmentation.

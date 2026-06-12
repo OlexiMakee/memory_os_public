@@ -86,10 +86,10 @@ Status: reformed on 2026-06-02 based on the autonomous_intelligence_hub_strategy
 - [x] **Retrieval Router Optimization**: Integrate exact symbol lookups, semantic vector matches, and code graph parsing into RAG queries.
 - [x] **OS-Inspired Memory Lifecycle**: Add node/edge/event manifests, worker isolation summaries, and validator status transitions for trusted memory updates.
 - [x] **Method Log Review API**: Add protected `/api/analytics/data-methods`, `POST /api/analytics/data-methods/review`, and scheduler-friendly `method-review` snapshot command.
-- [x] **Memory OS Control-Plane Audit**: Add `scripts/memory/audit_memos.py` to summarize handoff, capsules, lifecycle files, roadmap status, and next recommendations.
-- [x] **Portable Memos CLI**: Add `scripts/memos.py` with `init`, `integrate`, `audit`, `validate`, and `snapshot` commands for project-local Memory OS operations.
+- [x] **Memory OS Control-Plane Audit**: Add `scripts/memory/audit_memory_os.py` to summarize handoff, capsules, lifecycle files, roadmap status, and next recommendations.
+- [x] **Portable Memory OS CLI**: Add `scripts/memory_os.py` with `init`, `integrate`, `audit`, `validate`, and `snapshot` commands for project-local Memory OS operations.
 - [x] **Periodic Method Log Review Proposal Loop**: Convert repeated `method-review` insights into deduplicated admin proposals with dry-run default and optional lifecycle event logging.
-- [x] **Workflow Quantizer Alignment**: Align `quantize_task.py`, workflow TOML specs, and `scripts/memos.py quantize` with the 12-step Memory OS contract while preserving legacy 1-100 scoring.
+- [x] **Workflow Quantizer Alignment**: Align `quantize_task.py`, workflow TOML specs, and `scripts/memory_os.py quantize` with the 12-step Memory OS contract while preserving legacy 1-100 scoring.
 - [x] **Workflow Manifest Validation**: Validate workflow TOML specs for required fields, 12-step coverage, overlap, model policy, and generate `memory/workflow_manifest.json`.
 - [x] **Proposal Metadata Contract**: Define lightweight proposal defaults for `product` / `memory_os`, automated site feedback, method-review proposals, developer-owner authority, and future `master_admin` / `admin` / `user` roles without adding a DB migration or full RBAC layer.
 - [x] **Approved Scheduler Binding**: Choose a manual, launchd, cron, or dashboard-triggered cadence for `method-review` / `method-proposals`; do not run background daemons without explicit approval (Option S1 manual dashboard trigger button implemented).

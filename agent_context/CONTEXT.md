@@ -158,7 +158,7 @@ Never print values.
 - `YOUTUBE_API_KEY`
 - `DATABASE_URL`
 
-> **Memory OS Audit Checkpoint:** 2026-06-02 memos micro-steps complete; verify `scripts/memos.py audit` before Gemini giant agent activation.
+> **Memory OS Audit Checkpoint:** 2026-06-02 memory_os micro-steps complete; verify `scripts/memory_os.py audit` before Gemini giant agent activation.
 - `GEMINI_API_KEY`
 - `OPENAI_API_KEY`
 - `OPENROUTER_API_KEY`
