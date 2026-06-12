@@ -20,8 +20,8 @@ class LifecycleManager:
         repository: Optional[MemoryRepository] = None
     ):
         self.config = config or MemoryOSConfig()
-        storage = FileSystemMemoryStorage()
-        self.repository = repository or MemoryRepository(storage, self.config)
+        self.storage = FileSystemMemoryStorage()
+        self.repository = repository or MemoryRepository(self.storage, self.config)
 
     def _sha256_file(self, path: Path) -> str:
         return self.storage.get_sha256(path)
@@ -42,8 +42,9 @@ class LifecycleManager:
                     return False
         return True
 
-    def propose(self, node_id: str, node_type: str, summary: str, evidence: str, 
-                related_nodes: Optional[str] = None, validator: Optional[str] = None) -> int:
+    def propose(self, node_id: str, node_type: str, summary: str, evidence: str,
+                related_nodes: Optional[str] = None, validator: Optional[str] = None,
+                tags: Optional[str] = None) -> int:
         nodes_file = self.config.memory_dir / "nodes.jsonl"
         events_file = self.config.memory_dir / "events.jsonl"
 
@@ -55,6 +56,7 @@ class LifecycleManager:
 
         evidence_list = [e.strip() for e in evidence.split(",") if e.strip()]
         related = [r.strip() for r in related_nodes.split(",") if r.strip()] if related_nodes else []
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
         new_node = {
             "id": node_id,
@@ -64,7 +66,8 @@ class LifecycleManager:
             "status": "draft",
             "freshness": datetime.now().isoformat(timespec="seconds"),
             "trust": "unverified",
-            "related_nodes": related
+            "related_nodes": related,
+            "tags": tag_list,
         }
 
         self._append_jsonl(nodes_file, new_node)
@@ -96,8 +99,8 @@ class LifecycleManager:
         new_events = []
 
         for node in nodes:
-            if node["status"] in ["draft", "stale"]:
-                if not node.get("id") or not node.get("summary") or node.get("type") not in ["rule", "fact", "variable", "connector", "config", "policy"]:
+            if node["status"] in ["draft", "observed"]:
+                if not node.get("id") or not node.get("summary") or node.get("type") not in ["rule", "fact", "variable", "connector", "config", "policy", "module_cluster"]:
                     logger.info(f"INFO: Rejecting transition for node '{node['id']}': invalid schema.")
                     node["status"] = "stale"
                     for ev in events:
@@ -131,6 +134,9 @@ class LifecycleManager:
                         "status": "accepted"
                     }
                     new_events.append(verification_event)
+
+                    if node.get("type") == "rule":
+                        self._emit_skill_file(node)
 
             updated_nodes.append(node)
 
@@ -169,6 +175,20 @@ class LifecycleManager:
         self._write_jsonl(events_file, events + new_events)
         logger.info("INFO: Transition processing completed.")
         return 0
+
+    def _emit_skill_file(self, node: Dict[str, Any]) -> None:
+        skills_dir = self.config.root_dir / ".claude" / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        skill_path = skills_dir / f"{node['id']}.md"
+        lines = [f"# {node['id']}", "", node.get("summary", ""), ""]
+        evidence = node.get("evidence", [])
+        if evidence:
+            lines += ["**Evidence:**"] + [f"- {ev}" for ev in evidence] + [""]
+        tags = node.get("tags", [])
+        if tags:
+            lines.append(f"**Tags:** {', '.join(tags)}")
+        skill_path.write_text("\n".join(lines), encoding="utf-8")
+        logger.info(f"INFO: Emitted skill file: {skill_path.name}")
 
     def manifest(self) -> int:
         nodes_file = self.config.memory_dir / "nodes.jsonl"

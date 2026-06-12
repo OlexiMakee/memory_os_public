@@ -1,11 +1,173 @@
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict, Any, Iterable, Optional
+from typing import List, Dict, Any, Iterable, Optional, Set, Tuple
 
 from memory_os.core.interfaces import IMemoryOSConfig, IMemoryStorage
 from memory_os.core.repository import MemoryRepository
 from memory_os.core.config import MemoryOSConfig
 from memory_os.core.storage import FileSystemMemoryStorage
+
+
+# ---------------------------------------------------------------------------
+# EvolutionGate — verification pipeline for self-evolution artifacts
+# ---------------------------------------------------------------------------
+# Inspired by Hermes OS "verify before commit" principle, adapted for
+# data artifacts (nodes/edges) rather than code (typecheck/lint/tests).
+#
+# Pipeline stages (run in order, first failure stops that node):
+#   1. schema_check     — required fields present, valid enum values
+#   2. quality_check    — summary is substantive (not a one-liner stub)
+#   3. duplicate_check  — node ID not already in the graph
+#   4. contradiction_check — no existing verified node already refutes this ID
+#
+# Nodes that pass all stages are returned as "accepted" (still written as
+# status=draft; lifecycle.transition() promotes them later).
+# Nodes that fail are returned as "rejected" with a reason — callers should
+# log them to events.jsonl so failures are never silent.
+# ---------------------------------------------------------------------------
+
+VALID_NODE_TYPES: Set[str] = {
+    "rule", "fact", "variable", "connector", "config", "policy", "module_cluster"
+}
+VALID_EDGE_TYPES: Set[str] = {
+    "depends_on", "triggers", "refutes", "overrides", "configures", "secures", "contains"
+}
+SUMMARY_MIN_CHARS = 20
+
+
+@dataclass
+class NodeVerdict:
+    node: Dict[str, Any]
+    passed: bool
+    stage: str          # last stage executed
+    reason: str = ""    # populated on failure
+
+
+@dataclass
+class EvolutionReport:
+    accepted: List[Dict[str, Any]] = field(default_factory=list)
+    rejected: List[NodeVerdict] = field(default_factory=list)
+
+    @property
+    def accepted_count(self) -> int:
+        return len(self.accepted)
+
+    @property
+    def rejected_count(self) -> int:
+        return len(self.rejected)
+
+    def summary_lines(self) -> List[str]:
+        lines = [
+            f"EvolutionGate: {self.accepted_count} accepted, "
+            f"{self.rejected_count} rejected"
+        ]
+        for v in self.rejected:
+            lines.append(f"  REJECT [{v.stage}] {v.node.get('id', '?')} — {v.reason}")
+        return lines
+
+
+class EvolutionGate:
+    """
+    Staged verification gate for proposed memory nodes.
+
+    Usage::
+        gate = EvolutionGate(existing_node_ids, existing_edges)
+        report = gate.check_nodes(proposed_nodes)
+        # use report.accepted for nodes safe to write
+        # log report.rejected to events.jsonl
+    """
+
+    def __init__(
+        self,
+        existing_node_ids: Set[str],
+        existing_edges: Optional[List[Dict[str, Any]]] = None,
+        existing_verified_nodes: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        self.existing_node_ids = set(existing_node_ids)
+        self.existing_edges = existing_edges or []
+        # Build refutes index: target_id -> list of source verified node IDs
+        self._refutes_targets: Set[str] = {
+            e["target"]
+            for e in self.existing_edges
+            if e.get("type") == "refutes"
+            and e.get("target")
+            and _is_verified(e, existing_verified_nodes or [])
+        }
+        # Track IDs accepted in this run so intra-batch duplicates are caught
+        self._accepted_ids: Set[str] = set()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def check_nodes(self, proposed: List[Dict[str, Any]]) -> EvolutionReport:
+        report = EvolutionReport()
+        for node in proposed:
+            verdict = self._evaluate(node)
+            if verdict.passed:
+                report.accepted.append(node)
+                self._accepted_ids.add(node.get("id", ""))
+                # Make accepted IDs visible to subsequent nodes in same batch
+                self.existing_node_ids.add(node.get("id", ""))
+            else:
+                report.rejected.append(verdict)
+        return report
+
+    # ------------------------------------------------------------------
+    # Stages
+    # ------------------------------------------------------------------
+
+    def _evaluate(self, node: Dict[str, Any]) -> NodeVerdict:
+        for stage, check in [
+            ("schema_check",        self._schema_check),
+            ("quality_check",       self._quality_check),
+            ("duplicate_check",     self._duplicate_check),
+            ("contradiction_check", self._contradiction_check),
+        ]:
+            ok, reason = check(node)
+            if not ok:
+                return NodeVerdict(node=node, passed=False, stage=stage, reason=reason)
+        return NodeVerdict(node=node, passed=True, stage="all")
+
+    def _schema_check(self, node: Dict[str, Any]) -> Tuple[bool, str]:
+        for field_name in ("id", "type", "summary", "evidence"):
+            if not node.get(field_name):
+                return False, f"missing or empty required field '{field_name}'"
+        if node["type"] not in VALID_NODE_TYPES:
+            return False, f"invalid type '{node['type']}' — must be one of {sorted(VALID_NODE_TYPES)}"
+        if not isinstance(node["evidence"], list):
+            return False, "evidence must be a list"
+        return True, ""
+
+    def _quality_check(self, node: Dict[str, Any]) -> Tuple[bool, str]:
+        summary = node.get("summary", "")
+        if len(summary.strip()) < SUMMARY_MIN_CHARS:
+            return False, (
+                f"summary too short ({len(summary.strip())} chars, "
+                f"min {SUMMARY_MIN_CHARS}) — likely a stub"
+            )
+        return True, ""
+
+    def _duplicate_check(self, node: Dict[str, Any]) -> Tuple[bool, str]:
+        node_id = node.get("id", "")
+        if node_id in self.existing_node_ids:
+            return False, f"node ID '{node_id}' already exists in the graph"
+        return True, ""
+
+    def _contradiction_check(self, node: Dict[str, Any]) -> Tuple[bool, str]:
+        node_id = node.get("id", "")
+        if node_id in self._refutes_targets:
+            return False, (
+                f"a verified node already holds a 'refutes' edge targeting '{node_id}' — "
+                "resolve the contradiction before re-proposing"
+            )
+        return True, ""
+
+
+def _is_verified(edge: Dict[str, Any], verified_nodes: List[Dict[str, Any]]) -> bool:
+    verified_ids = {n["id"] for n in verified_nodes if n.get("status") == "verified"}
+    return edge.get("source", "") in verified_ids
 
 REQUIRED_CAPSULE_FIELDS = {
     "timestamp",
@@ -69,9 +231,9 @@ class MemoryValidator:
         if not self.storage.exists(nodes_file):
             return [f"nodes.jsonl not found at {nodes_file}"]
 
-        valid_types = {"rule", "fact", "variable", "connector", "config", "policy"}
+        valid_types = VALID_NODE_TYPES
         valid_statuses = {"draft", "observed", "verified", "stale", "superseded"}
-        valid_trusts = {"verified", "unverified"}
+        valid_trusts = {"verified", "unverified", "extracted", "inferred"}
 
         for line_num, line in enumerate(self.storage.read_lines(nodes_file), 1):
             line = line.strip()
@@ -100,6 +262,13 @@ class MemoryValidator:
                 errors.append(f"nodes.jsonl:L{line_num} invalid status '{node['status']}'")
             if node["trust"] not in valid_trusts:
                 errors.append(f"nodes.jsonl:L{line_num} invalid trust '{node['trust']}'")
+            if "tags" in node:
+                if not isinstance(node["tags"], list):
+                    errors.append(f"nodes.jsonl:L{line_num} 'tags' must be a list")
+                else:
+                    for tag in node["tags"]:
+                        if not isinstance(tag, str):
+                            errors.append(f"nodes.jsonl:L{line_num} tag items must be strings")
 
             if not isinstance(node["evidence"], list):
                 errors.append(f"nodes.jsonl:L{line_num} evidence field must be a list")
@@ -133,7 +302,7 @@ class MemoryValidator:
                 except json.JSONDecodeError:
                     continue
 
-        valid_types = {"depends_on", "triggers", "refutes", "overrides", "configures", "secures"}
+        valid_types = VALID_EDGE_TYPES
 
         for line_num, line in enumerate(self.storage.read_lines(edges_file), 1):
             line = line.strip()

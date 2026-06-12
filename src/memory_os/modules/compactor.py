@@ -13,7 +13,7 @@ from memory_os.core.exceptions import MemoryOSError, ValidationError
 from memory_os.core.config import MemoryOSConfig
 from memory_os.core.storage import FileSystemMemoryStorage
 from memory_os.core.llm_service import DefaultLlmProviderService
-from memory_os.modules.validator import EvolutionGate
+from memory_os.modules.validator import EvolutionGate, VALID_EDGE_TYPES
 from memory_os.modules.exporter import PolyglotExporter
 
 SYSTEM_PROMPT = """You are the Memory OS Knowledge Compactor.
@@ -75,7 +75,8 @@ Guidelines:
       "id": "new.unified.node.id",
       "type": "rule",
       "summary": "Unified summary of the combined rules.",
-      "evidence": ["path1.py", "path2.py"]
+      "evidence": ["path1.py", "path2.py"],
+      "tags": ["merged", "optional-labels"]
     }
   ],
   "edges": [
@@ -86,6 +87,7 @@ Guidelines:
     }
   ]
 }
+The "tags" field is optional — carry over merged source node tags, deduplicated. Omit if no clear category.
 Do not write markdown wraps like ```json or any other text before/after. Just the JSON object.
 """
 
@@ -311,7 +313,7 @@ class MemoryCompactor:
                 })
 
             # Validate and append edges
-            valid_edge_types = {"depends_on", "triggers", "refutes", "overrides", "configures", "secures"}
+            valid_edge_types = VALID_EDGE_TYPES
 
             for edge in proposed_edges:
                 source = edge.get("source")
@@ -373,7 +375,7 @@ class MemoryCompactor:
         from memory_os.modules.lifecycle import LifecycleManager
 
         logger.info("Running lifecycle transition validations...")
-        lifecycle = LifecycleManager(self.config, self.storage)
+        lifecycle = LifecycleManager(self.config)
         lifecycle.transition(validator="memory_os_compactor")
         lifecycle.prune()
         lifecycle.manifest()
@@ -516,7 +518,7 @@ class MemoryCompactor:
         if node_append_count > 0:
             from memory_os.modules.lifecycle import LifecycleManager
             logger.info("Running lifecycle transition validations to deprecate old nodes...")
-            lifecycle = LifecycleManager(self.config, self.storage)
+            lifecycle = LifecycleManager(self.config)
             lifecycle.transition(validator="memory_os_compressor")
             lifecycle.prune()
             lifecycle.manifest()

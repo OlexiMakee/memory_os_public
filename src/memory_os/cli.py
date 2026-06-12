@@ -278,6 +278,420 @@ def cmd_prune(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     lifecycle = LifecycleManager(config)
     return lifecycle.prune()
 
+def cmd_transition(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    lifecycle = LifecycleManager(config)
+    ret = lifecycle.transition(validator=args.validator)
+    if ret != 0:
+        return ret
+    if args.prune:
+        lifecycle.prune()
+    lifecycle.manifest()
+    print("Lifecycle transition complete.")
+    return 0
+
+def cmd_graph_map(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.toolkit.graph_mapper import GraphMapper
+
+    mapper = GraphMapper(config)
+    result = mapper.run(emit_nodes=args.emit_nodes)
+
+    if result["status"] == "error":
+        print(f"Error: {result['reason']}", file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2, ensure_ascii=False, default=list))
+        return 0
+
+    print(f"Codebase map written to: {result['output']}")
+    print(f"Files indexed: {result['total_files']}")
+
+    god_nodes = result.get("god_nodes", [])
+    if god_nodes:
+        print(f"\nGod nodes ({len(god_nodes)}):")
+        for node in god_nodes:
+            print(f"  {node['in_degree']:>3}x  {node['file']}  [{node['layer']}]")
+    else:
+        print("\nNo god nodes found — run `memory_os snapshot --write` first.")
+
+    clusters = result.get("clusters", [])
+    if clusters:
+        print(f"\nModule clusters ({len(clusters)}):")
+        for c in clusters:
+            print(f"  {c['name']}/  ({c['file_count']} files, {c['internal_edges']} internal edges)")
+
+    if args.emit_nodes:
+        print("\nCluster nodes emitted to memory/nodes.jsonl.")
+
+    return 0
+
+def cmd_triage(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.core.storage import FileSystemMemoryStorage
+
+    storage = FileSystemMemoryStorage()
+    nodes_path = config.memory_dir / "nodes.jsonl"
+    events_path = config.memory_dir / "events.jsonl"
+
+    nodes = storage.load_jsonl(nodes_path)
+    draft_nodes = [n for n in nodes if n["status"] == "draft"]
+
+    if not draft_nodes:
+        print("No draft nodes to triage.")
+        return 0
+
+    verified_nodes = [n for n in nodes if n["status"] == "verified"]
+
+    def _word_overlap(a: str, b: str) -> float:
+        wa = set(a.lower().split())
+        wb = set(b.lower().split())
+        if not wa or not wb:
+            return 0.0
+        return len(wa & wb) / len(wa | wb)
+
+    non_interactive = args.dry_run or not sys.stdin.isatty()
+    if non_interactive:
+        print(f"{len(draft_nodes)} draft node(s) pending triage:")
+        for n in draft_nodes:
+            print(f"  [{n['id']}] ({n['type']}) {n['summary'][:80]}")
+        return 0
+
+    approved = rejected = skipped = 0
+    updates: Dict[str, Any] = {}
+    new_events = []
+
+    print(f"\n=== Memory OS Triage ({len(draft_nodes)} draft nodes) ===")
+    print("y = approve  |  n = reject  |  s = skip  |  t tag1,tag2 = tag+approve\n")
+
+    for idx, node in enumerate(draft_nodes, 1):
+        print(f"[{idx}/{len(draft_nodes)}]  {node['id']}  ({node['type']})")
+        print(f"  Summary : {node['summary']}")
+        if node.get("tags"):
+            print(f"  Tags    : {', '.join(node['tags'])}")
+        if node.get("evidence"):
+            print(f"  Evidence: {', '.join(node['evidence'])}")
+
+        similar = sorted(
+            [(v["id"], _word_overlap(node["summary"], v["summary"])) for v in verified_nodes],
+            key=lambda x: -x[1],
+        )
+        similar = [(nid, s) for nid, s in similar if s >= 0.4]
+        if similar:
+            print(f"  ⚠  Similar verified: {similar[0][0]} ({similar[0][1]:.0%} overlap)")
+
+        while True:
+            try:
+                answer = input("  > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nTriage interrupted.")
+                break
+            al = answer.lower()
+            if al == "y":
+                updates[node["id"]] = {"status": "observed", "action": "approved", "tags": []}
+                approved += 1
+                break
+            elif al == "n":
+                updates[node["id"]] = {"status": "stale", "action": "rejected", "tags": []}
+                rejected += 1
+                break
+            elif al == "s":
+                skipped += 1
+                break
+            elif al.startswith("t"):
+                tag_str = answer[1:].strip().strip(",")
+                new_tags = [t.strip() for t in tag_str.split(",") if t.strip()]
+                updates[node["id"]] = {"status": "observed", "action": "tagged", "tags": new_tags}
+                approved += 1
+                break
+            else:
+                print("  y / n / s / t tag1,tag2")
+
+    if updates:
+        now = datetime.now().isoformat(timespec="seconds")
+        updated_nodes = []
+        for node in nodes:
+            upd = updates.get(node["id"])
+            if upd:
+                node = dict(node)
+                node["status"] = upd["status"]
+                if upd.get("tags"):
+                    merged = list(dict.fromkeys(node.get("tags", []) + upd["tags"]))
+                    node["tags"] = merged
+                new_events.append({
+                    "timestamp": now,
+                    "event": "memory.node.triaged",
+                    "node_id": node["id"],
+                    "claim": f"Human triage: {upd['action']} → {upd['status']}",
+                    "evidence": node.get("evidence", []),
+                    "validator": "human_triage",
+                    "status": "accepted" if upd["action"] != "rejected" else "rejected",
+                    "action": upd["action"],
+                })
+            updated_nodes.append(node)
+        storage.save_jsonl(nodes_path, updated_nodes)
+        for ev in new_events:
+            storage.append_jsonl(events_path, ev)
+
+    print(f"\nTriage complete: {approved} approved, {rejected} rejected, {skipped} skipped.")
+    if approved:
+        print("Hint: run `memory_os transition` to promote observed → verified.")
+    return 0
+
+
+def cmd_query(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.core.storage import FileSystemMemoryStorage
+
+    storage = FileSystemMemoryStorage()
+    nodes_path = config.memory_dir / "nodes.jsonl"
+    internal_nodes_path = config.internal_memory_dir / "nodes.jsonl"
+
+    nodes = storage.load_jsonl(nodes_path)
+    if storage.exists(internal_nodes_path):
+        nodes += storage.load_jsonl(internal_nodes_path)
+
+    results = nodes
+    if args.type:
+        results = [n for n in results if n.get("type") == args.type]
+    if args.trust:
+        results = [n for n in results if n.get("trust") == args.trust]
+    if args.status:
+        results = [n for n in results if n.get("status") == args.status]
+    if args.tag:
+        tl = args.tag.lower()
+        results = [n for n in results if any(tl == t.lower() for t in n.get("tags", []))]
+    if args.since:
+        results = [n for n in results if n.get("freshness", "") >= args.since]
+
+    if not results:
+        print("No nodes match the given filters.")
+        return 0
+
+    if args.json:
+        print(json.dumps(results, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"Found {len(results)} node(s):\n")
+    for node in results:
+        print(f"[{node['id']}]  ({node['type']})")
+        print(f"  Summary  : {node['summary']}")
+        print(f"  Status   : {node['status']} | Trust: {node['trust']} | Freshness: {node.get('freshness', 'N/A')}")
+        if node.get("tags"):
+            print(f"  Tags     : {', '.join(node['tags'])}")
+        if node.get("evidence"):
+            print(f"  Evidence : {', '.join(node['evidence'])}")
+        print()
+    return 0
+
+
+def cmd_backlinks(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.core.storage import FileSystemMemoryStorage
+
+    storage = FileSystemMemoryStorage()
+    nodes_path = config.memory_dir / "nodes.jsonl"
+    edges_path = config.memory_dir / "edges.jsonl"
+
+    nodes = storage.load_jsonl(nodes_path)
+    edges = storage.load_jsonl(edges_path)
+
+    target_id = args.node_id
+    all_ids = {n["id"] for n in nodes}
+    if target_id not in all_ids:
+        print(f"Node '{target_id}' not found in nodes.jsonl.")
+        return 1
+
+    inbound_edges = [e for e in edges if e.get("target") == target_id]
+    edge_source_ids = {e["source"] for e in inbound_edges}
+
+    related_refs = [
+        n for n in nodes
+        if target_id in n.get("related_nodes", []) and n["id"] != target_id
+    ]
+    related_ref_ids = {n["id"] for n in related_refs}
+
+    textual_refs = [
+        n for n in nodes
+        if n["id"] != target_id
+        and n["id"] not in edge_source_ids
+        and n["id"] not in related_ref_ids
+        and target_id in n.get("summary", "")
+    ]
+
+    if not inbound_edges and not related_refs and not textual_refs:
+        print(f"No backlinks found for '{target_id}'.")
+        return 0
+
+    if args.json:
+        print(json.dumps({
+            "target": target_id,
+            "inbound_edges": inbound_edges,
+            "related_node_refs": [n["id"] for n in related_refs],
+            "textual_refs": [n["id"] for n in textual_refs],
+        }, indent=2, ensure_ascii=False))
+        return 0
+
+    nodes_by_id = {n["id"]: n for n in nodes}
+    print(f"Backlinks for '{target_id}':\n")
+
+    if inbound_edges:
+        print(f"Edges pointing here ({len(inbound_edges)}):")
+        for e in inbound_edges:
+            src = nodes_by_id.get(e["source"], {})
+            print(f"  [{e['source']}] --{e['type']}--> {target_id}")
+            if src.get("summary"):
+                print(f"    {src['summary'][:90]}")
+        print()
+
+    if related_refs:
+        print(f"related_nodes references ({len(related_refs)}):")
+        for n in related_refs:
+            print(f"  [{n['id']}]  {n['summary'][:90]}")
+        print()
+
+    if textual_refs:
+        print(f"Textual mentions without edge ({len(textual_refs)}):")
+        for n in textual_refs:
+            print(f"  [{n['id']}]  {n['summary'][:90]}")
+        print("  Hint: consider adding edges to formalise these relationships.")
+
+    return 0
+
+
+def cmd_unlinked(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.core.storage import FileSystemMemoryStorage
+
+    storage = FileSystemMemoryStorage()
+    nodes_path = config.memory_dir / "nodes.jsonl"
+    edges_path = config.memory_dir / "edges.jsonl"
+    capsules_path = config.capsules_file
+
+    nodes = storage.load_jsonl(nodes_path)
+    edges = storage.load_jsonl(edges_path)
+
+    all_node_ids = [n["id"] for n in nodes]
+    edge_pairs = {(e["source"], e["target"]) for e in edges}
+    edge_pairs |= {(e["target"], e["source"]) for e in edges}
+
+    findings: List[Dict[str, Any]] = []
+
+    for node in nodes:
+        summary = node.get("summary", "")
+        for other_id in all_node_ids:
+            if other_id == node["id"]:
+                continue
+            if other_id in summary and (node["id"], other_id) not in edge_pairs:
+                findings.append({
+                    "source": node["id"],
+                    "mentioned": other_id,
+                    "context": "node_summary",
+                    "snippet": summary[:120],
+                })
+
+    if storage.exists(capsules_path):
+        capsules = storage.load_jsonl(capsules_path)
+        for cap in capsules:
+            ts = cap.get("timestamp", "?")
+            full_text = " ".join([
+                cap.get("task", ""),
+                cap.get("hurdles_regression", ""),
+                cap.get("resolution", ""),
+                cap.get("lessons_learned", ""),
+            ])
+            for node_id in all_node_ids:
+                if node_id in full_text:
+                    findings.append({
+                        "source": f"capsule:{ts}",
+                        "mentioned": node_id,
+                        "context": "task_capsule",
+                        "snippet": full_text[:120],
+                    })
+
+    if not findings:
+        print("No unlinked mentions found.")
+        return 0
+
+    if args.json:
+        print(json.dumps(findings, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"Found {len(findings)} unlinked mention(s):\n")
+    for f in findings:
+        print(f"  {f['source']}  mentions  [{f['mentioned']}]  (via {f['context']})")
+        print(f"  └ {f['snippet'][:100]}")
+        print()
+    print("Run `memory_os backlinks <node-id>` for details, then add edges to formalise.")
+    return 0
+
+
+def cmd_ide_grant(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    import json
+    from datetime import datetime
+    
+    print("Configuring Antigravity Auto-Permissions...")
+    home = Path.home()
+    config_dir = home / ".gemini" / "config"
+    config_path = config_dir / "config.json"
+    
+    print(f"Target config file: {config_path}")
+    config_dir.mkdir(parents=True, exist_ok=True)
+    
+    wildcards = [
+        "command(*)",
+        "custom(*)",
+        "execute_url(*)",
+        "mcp(*)",
+        "read_file(*)",
+        "read_url(*)",
+        "unsandboxed(*)",
+        "write_file(*)"
+    ]
+    
+    config_data = {}
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    config_data = json.loads(content)
+        except Exception as e:
+            print(f"Warning: Failed to parse existing config.json: {e}")
+            backup_path = config_path.with_name(f"config.json.bak-{datetime.now().strftime('%Y%m%d%H%M%S')}")
+            try:
+                config_path.rename(backup_path)
+                print(f"Backup saved to: {backup_path}")
+            except Exception as backup_err:
+                print(f"Error: Could not back up config file: {backup_err}")
+                return 1
+            config_data = {}
+            
+    if "userSettings" not in config_data or not isinstance(config_data["userSettings"], dict):
+        config_data["userSettings"] = {}
+    if "globalPermissionGrants" not in config_data["userSettings"] or not isinstance(config_data["userSettings"]["globalPermissionGrants"], dict):
+        config_data["userSettings"]["globalPermissionGrants"] = {}
+    if "allow" not in config_data["userSettings"]["globalPermissionGrants"] or not isinstance(config_data["userSettings"]["globalPermissionGrants"]["allow"], list):
+        config_data["userSettings"]["globalPermissionGrants"]["allow"] = []
+        
+    allow_list = config_data["userSettings"]["globalPermissionGrants"]["allow"]
+    added_count = 0
+    
+    for wc in wildcards:
+        if wc not in allow_list:
+            allow_list.append(wc)
+            print(f"Adding permission: {wc}")
+            added_count += 1
+            
+    if added_count > 0:
+        config_data["userSettings"]["globalPermissionGrants"]["allow"] = allow_list
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=2)
+            print("Successfully enabled auto-permissions! Antigravity will now run autonomously without prompting.")
+            return 0
+        except Exception as e:
+            print(f"Error: Failed to write config.json: {e}")
+            return 1
+    else:
+        print("All auto-permission wildcard rules are already configured in config.json.")
+        return 0
+
 def cmd_stats(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     import yaml
     root = Path(args.root).resolve()
@@ -598,77 +1012,6 @@ def cmd_db_optimize(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         print(f"Failed to optimize database: {e}")
         return 1
 
-def cmd_ide_grant(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    import json
-    from datetime import datetime
-    
-    print("Configuring Antigravity Auto-Permissions...")
-    home = Path.home()
-    config_dir = home / ".gemini" / "config"
-    config_path = config_dir / "config.json"
-    
-    print(f"Target config file: {config_path}")
-    config_dir.mkdir(parents=True, exist_ok=True)
-    
-    wildcards = [
-        "command(*)",
-        "custom(*)",
-        "execute_url(*)",
-        "mcp(*)",
-        "read_file(*)",
-        "read_url(*)",
-        "unsandboxed(*)",
-        "write_file(*)"
-    ]
-    
-    config_data = {}
-    if config_path.exists():
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if content:
-                    config_data = json.loads(content)
-        except Exception as e:
-            print(f"Warning: Failed to parse existing config.json: {e}")
-            backup_path = config_path.with_name(f"config.json.bak-{datetime.now().strftime('%Y%m%d%H%M%S')}")
-            try:
-                config_path.rename(backup_path)
-                print(f"Backup saved to: {backup_path}")
-            except Exception as backup_err:
-                print(f"Error: Could not back up config file: {backup_err}")
-                return 1
-            config_data = {}
-            
-    if "userSettings" not in config_data or not isinstance(config_data["userSettings"], dict):
-        config_data["userSettings"] = {}
-    if "globalPermissionGrants" not in config_data["userSettings"] or not isinstance(config_data["userSettings"]["globalPermissionGrants"], dict):
-        config_data["userSettings"]["globalPermissionGrants"] = {}
-    if "allow" not in config_data["userSettings"]["globalPermissionGrants"] or not isinstance(config_data["userSettings"]["globalPermissionGrants"]["allow"], list):
-        config_data["userSettings"]["globalPermissionGrants"]["allow"] = []
-        
-    allow_list = config_data["userSettings"]["globalPermissionGrants"]["allow"]
-    added_count = 0
-    
-    for wc in wildcards:
-        if wc not in allow_list:
-            allow_list.append(wc)
-            print(f"Adding permission: {wc}")
-            added_count += 1
-            
-    if added_count > 0:
-        config_data["userSettings"]["globalPermissionGrants"]["allow"] = allow_list
-        try:
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(config_data, f, indent=2)
-            print("Successfully enabled auto-permissions! Antigravity will now run autonomously without prompting.")
-            return 0
-        except Exception as e:
-            print(f"Error: Failed to write config.json: {e}")
-            return 1
-    else:
-        print("All auto-permission wildcard rules are already configured in config.json.")
-        return 0
-
 def cmd_monitor(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     import time
     root = Path(args.root).resolve()
@@ -764,6 +1107,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prune_parser.set_defaults(func=cmd_prune)
 
+    transition_parser = subparsers.add_parser(
+        "transition",
+        help="Promote observed nodes to verified; handle overrides/refutes deprecation; write manifest.",
+    )
+    transition_parser.add_argument("--prune", action="store_true", help="Also archive stale/superseded nodes after transition.")
+    transition_parser.add_argument("--validator", default="cli_transition", help="Validator name recorded in events.jsonl.")
+    transition_parser.set_defaults(func=cmd_transition)
+
+    graph_map_parser = subparsers.add_parser(
+        "graph-map",
+        help="Compute god nodes and module clusters from snapshot; write agent_context/codebase_map.md.",
+    )
+    graph_map_parser.add_argument("--emit-nodes", action="store_true", help="Also write module_cluster nodes into memory/nodes.jsonl.")
+    graph_map_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    graph_map_parser.set_defaults(func=cmd_graph_map)
+
     analyze_os_parser = subparsers.add_parser(
         "analyze-os",
         help="Analyze Memory OS algorithms and LLM telemetry to generate actionable insights."
@@ -857,6 +1216,40 @@ def build_parser() -> argparse.ArgumentParser:
 
     db_optimize_parser = subparsers.add_parser("db-optimize", help="Optimize FTS5 indexes and VACUUM the database.")
     db_optimize_parser.set_defaults(func=cmd_db_optimize)
+
+    triage_parser = subparsers.add_parser(
+        "triage",
+        help="Interactively review draft nodes: approve (observed), reject (stale), tag, or skip.",
+    )
+    triage_parser.add_argument("--dry-run", action="store_true", help="List draft nodes without prompting.")
+    triage_parser.set_defaults(func=cmd_triage)
+
+    query_parser = subparsers.add_parser(
+        "query",
+        help="Filter memory nodes by metadata (type, trust, status, tag, date).",
+    )
+    query_parser.add_argument("--type", help="Filter by node type (rule, fact, policy, …)")
+    query_parser.add_argument("--trust", help="Filter by trust level (verified, unverified, extracted, inferred)")
+    query_parser.add_argument("--status", help="Filter by status (draft, observed, verified, stale, superseded)")
+    query_parser.add_argument("--tag", help="Filter by tag (exact match, case-insensitive)")
+    query_parser.add_argument("--since", help="Filter nodes with freshness >= ISO date (e.g. 2026-06-01)")
+    query_parser.add_argument("--json", action="store_true", help="Output raw JSON.")
+    query_parser.set_defaults(func=cmd_query)
+
+    backlinks_parser = subparsers.add_parser(
+        "backlinks",
+        help="Show all nodes that reference a given node ID via edges, related_nodes, or text.",
+    )
+    backlinks_parser.add_argument("node_id", help="Target node ID to look up.")
+    backlinks_parser.add_argument("--json", action="store_true", help="Output raw JSON.")
+    backlinks_parser.set_defaults(func=cmd_backlinks)
+
+    unlinked_parser = subparsers.add_parser(
+        "unlinked",
+        help="Scan node summaries and task capsules for textual node ID mentions without edges.",
+    )
+    unlinked_parser.add_argument("--json", action="store_true", help="Output raw JSON.")
+    unlinked_parser.set_defaults(func=cmd_unlinked)
 
     ide_grant_parser = subparsers.add_parser("ide-grant", help="Enable autonomous execution for the IDE agent.")
     ide_grant_parser.set_defaults(func=cmd_ide_grant)

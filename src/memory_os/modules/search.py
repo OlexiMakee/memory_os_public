@@ -62,7 +62,47 @@ class MemorySearcher:
 
         return visited
 
-    def traverse_dependencies(self, start_files: Set[str], depth: int, 
+    def _build_reverse_dep_map(
+        self, items_by_file: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Set[str]]:
+        """Build file -> set of files that import it (for blast radius queries)."""
+        all_files = list(items_by_file.keys())
+        reverse: Dict[str, Set[str]] = {f: set() for f in all_files}
+        for src_file, item in items_by_file.items():
+            for dep in item.get("meta", {}).get("dependencies", []):
+                dep_lower = dep.lower()
+                for other_file in all_files:
+                    other_path = Path(other_file)
+                    other_stem = other_path.stem.lower()
+                    other_mod = other_path.with_suffix("").as_posix().replace("/", ".").lower()
+                    if (dep_lower == other_stem
+                            or dep_lower == other_mod
+                            or other_mod.endswith("." + dep_lower)):
+                        if other_file != src_file:
+                            reverse[other_file].add(src_file)
+                            break
+        return reverse
+
+    def traverse_dependents(
+        self, start_files: Set[str], depth: int,
+        reverse_map: Dict[str, Set[str]]
+    ) -> Set[str]:
+        """Traverse reverse dependency edges — files that would be affected if start_files change."""
+        visited = set(start_files)
+        current_level = set(start_files)
+        for _ in range(depth):
+            next_level = set()
+            for filepath in current_level:
+                for dependent in reverse_map.get(filepath, set()):
+                    if dependent not in visited:
+                        next_level.add(dependent)
+                        visited.add(dependent)
+            current_level = next_level
+            if not current_level:
+                break
+        return visited
+
+    def traverse_dependencies(self, start_files: Set[str], depth: int,
                               items_by_file: Dict[str, Dict[str, Any]]) -> Set[str]:
         visited = set(start_files)
         current_level = set(start_files)
@@ -99,49 +139,19 @@ class MemorySearcher:
 
         query_lower = query.strip().lower()
 
-        # 1. Search memory nodes using SQLite Graph Index (Phase 5)
-        from memory_os.core.core import MemoryOS
-        db = MemoryOS(self.config)
-        conn = db.get_connection()
+        # 1. Search memory nodes
+        nodes_by_id = {node["id"]: node for node in nodes}
         matched_node_ids = set()
-        nodes_by_id = {}
-        try:
-            # Load all active nodes into memory for traversal
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM graph_nodes WHERE valid_to IS NULL")
-            for row in cursor.fetchall():
-                d = dict(row)
-                d["evidence"] = [] # SQLite doesn't store array, we'll just mock it or fetch from JSONL if needed
-                nodes_by_id[d["id"]] = d
-            
-            # Fast search via SQLite FTS5 Match
-            # Note: We query the graph_nodes_fts virtual table for efficient full-text indexing
-            # Join with graph_nodes to ensure we only return active nodes
-            # We use snippet() to extract the exact match context for RAG
-            cursor.execute("""
-                SELECT f.id, snippet(graph_nodes_fts, -1, '<b>', '</b>', '...', 64) AS match_snippet 
-                FROM graph_nodes_fts f
-                JOIN graph_nodes n ON f.rowid = n.rowid
-                WHERE f.graph_nodes_fts MATCH ? AND n.valid_to IS NULL
-            """, (query,))
-            
-            snippets_by_id = {}
-            for row in cursor.fetchall():
-                matched_node_ids.add(row["id"])
-                snippets_by_id[row["id"]] = row["match_snippet"]
-                
-        finally:
-            conn.close()
+        for node in nodes:
+            if (query_lower in node["id"].lower() or
+                query_lower in node["summary"].lower() or
+                any(query_lower in ev.lower() for ev in node["evidence"]) or
+                query_lower in node["type"].lower() or
+                any(query_lower in tag.lower() for tag in node.get("tags", []))):
+                matched_node_ids.add(node["id"])
 
         all_matched_node_ids = self.traverse_graph(matched_node_ids, depth, nodes_by_id, edges)
-        
-        matched_nodes = []
-        for nid in all_matched_node_ids:
-            if nid in nodes_by_id:
-                node_copy = dict(nodes_by_id[nid])
-                if nid in snippets_by_id:
-                    node_copy["match_snippet"] = snippets_by_id[nid]
-                matched_nodes.append(node_copy)
+        matched_nodes = [nodes_by_id[nid] for nid in all_matched_node_ids if nid in nodes_by_id]
 
         # 2. Search codebase items
         items = snapshot.get("items", [])
@@ -181,6 +191,12 @@ class MemorySearcher:
 
         traversed_files = self.traverse_dependencies(exact_files, depth, items_by_file)
 
+        # Blast radius: files that import the queried files (affected if query target changes)
+        blast_files: Set[str] = set()
+        if exact_files:
+            reverse_map = self._build_reverse_dep_map(items_by_file)
+            blast_files = self.traverse_dependents(exact_files, depth, reverse_map) - exact_files
+
         def to_node_shape(fp: str, rank: int, match_type: str) -> Dict[str, Any]:
             item = items_by_file[fp]
             meta = item["meta"]
@@ -211,7 +227,11 @@ class MemorySearcher:
         for f in traversed_files - exact_files:
             results_code.append(to_node_shape(f, 2, "code_dependency"))
 
-        for f in lexical_files - traversed_files - exact_files:
+        # Blast radius results — files that would break if queried file changes
+        for f in blast_files - traversed_files - exact_files:
+            results_code.append(to_node_shape(f, 4, "blast_radius"))
+
+        for f in lexical_files - traversed_files - exact_files - blast_files:
             results_code.append(to_node_shape(f, 3, "lexical"))
 
         return matched_nodes + results_code
