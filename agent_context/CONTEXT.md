@@ -181,3 +181,8 @@ Never print values.
 - Chart text that users copy should exist in DOM, not canvas only.
 - Top 100/list items should keep full title on hover and reuse existing detail modal.
 - AI chat open/close controls are separate from summarize action.
+
+## Single Source of Truth (SSOT)
+- **Memory OS Root**: This directory (`memory_os`) is the definitive, authoritative source repository for the Memory OS framework.
+- **Agent Enforcement**: All architectural changes, features, and fixes to Memory OS MUST be committed here and pushed to GitHub.
+- **Downstream Projects**: Other workspaces (such as `News Research Automation`) MUST NOT maintain diverging local forks (`memory_os_local`). They must pull Memory OS updates directly from GitHub as a dependency or submodule. Any missing features discovered in downstream projects should be implemented back into this SSOT root.
