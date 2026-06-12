@@ -1,32 +1,113 @@
-# Memory OS (Portable Core)
+# Memory OS
 
-**Memory OS extends an LLM beyond its context window by giving it a local, indexed, protocol-governed long-term memory graph.**
+**Local-first long-term memory for LLM agents.**
 
-It is a local-first long-term semantic memory prosthesis for LLM agents. Instead of forcing the LLM to remember everything in its limited context window, Memory OS stores knowledge as explicitly linked nodes, relations, evidence, metadata, and lifecycle states. It acts as an external hippocampus—retrieving only the relevant context precisely when the agent needs it.
+Memory OS gives your AI agent a persistent, indexed memory graph — so it stops forgetting everything between sessions.
 
-> *LLM shouldn't remember everything. It should know how to ask Memory OS.*
+> *The LLM shouldn't remember everything. It should know how to ask Memory OS.*
 
-## Standalone Usage
+## Install
 
-This directory (`memory_os/`) is completely self-contained. It only relies on the Python standard library. It does not import anything from the host product (`news-scraper` or otherwise).
-
-### Moving to a New Agent Project
-To transfer Memory OS to another agent project:
-1. **Copy the directory:** Simply copy this entire `memory_os/` directory into the root of your new project.
-2. **Add CLI Entry Point:** If you want the `memory_os` CLI to be available globally in the new project's virtual environment, add the following to your new project's `pyproject.toml`:
-   ```toml
-   [project.scripts]
-   memory_os = "memory_os.cli:main"
-   ```
-   Then run `pip install -e .` in the new project.
-3. **If developing as a standalone package:** 
-   Rename `STANDALONE_pyproject.toml` to `pyproject.toml` and move it to the *parent directory* alongside the `memory_os` folder, giving you a standard Python package structure.
-
-### Testing
-All internal tests for Memory OS are located in `memory_os/tests/`. To run them (from the root of the project where `memory_os` is placed):
 ```bash
-python -m unittest discover -s memory_os/tests
+pip install git+https://github.com/OlexiMakee/memory_os.git@public
 ```
 
-### Architecture
-See `docs/ARCHITECTURE.md` (if exported) for full system design, or review `core/repository.py` to see how the Domain models (`MemoryNode`, `MemoryEdge`, `TaskCapsule`) are persisted to `IMemoryStorage`.
+Or clone and install locally:
+
+```bash
+git clone -b public https://github.com/OlexiMakee/memory_os.git
+cd memory_os
+pip install -e .
+```
+
+## Quickstart (5 minutes)
+
+```bash
+# 1. Initialize Memory OS in your project root
+cd your-project/
+memory_os init
+
+# 2. Verify everything is wired up
+memory_os validate
+
+# 3. Sync memory to the search index
+memory_os sync
+
+# 4. Search memory
+memory_os search "authentication"
+
+# 5. Review and approve draft memory nodes
+memory_os triage
+```
+
+## Core Commands
+
+| Command | What it does |
+|---|---|
+| `init` | Create memory files and config in current directory |
+| `validate` | Check that memory files and capsules are valid |
+| `sync` | Sync `memory/nodes.jsonl` → SQLite FTS5 index |
+| `search <query>` | Keyword search across memory nodes |
+| `snapshot` | Build a compact memory snapshot for agent context |
+| `compact` | Extract new memory nodes from task capsules via LLM |
+| `compress` | Semantically merge duplicate memory nodes |
+| `prune` | Archive stale and superseded nodes |
+| `transition` | Promote draft nodes through lifecycle states |
+| `review` | List draft nodes pending approval |
+| `approve <id>` | Approve a draft node |
+| `triage` | Interactive review of draft nodes |
+| `query` | Filter nodes by type, status, trust, tag, date |
+| `backlinks <id>` | Show all nodes that reference a given node |
+| `audit` | Audit control-plane state |
+
+## How it works
+
+Memory lives in `memory/nodes.jsonl` and `memory/edges.jsonl` — plain text files you can read and edit.
+
+Agents write **task capsules** to `agent_context/task_capsules.jsonl` when they complete work. Running `memory_os compact` extracts structured memory nodes from those capsules via LLM. Running `memory_os sync` indexes them into SQLite FTS5 for fast search.
+
+```
+agent completes task
+    → writes task_capsules.jsonl
+    → memory_os compact  (LLM extracts nodes)
+    → memory_os sync     (indexes to SQLite)
+    → memory_os search   (retrieves relevant context)
+```
+
+## Environment variables
+
+Create a `.env` in your project root:
+
+```bash
+OPENAI_API_KEY=sk-...       # for compact/compress/prune (LLM operations)
+OPENROUTER_API_KEY=...      # alternative provider
+GEMINI_API_KEY=...          # alternative provider
+```
+
+LLM operations (`compact`, `compress`, `giant-scan`) require at least one key.
+`init`, `validate`, `sync`, `search`, `review`, `approve`, `triage`, `query`, `backlinks` work offline.
+
+## Agent integration
+
+After `memory_os init`, add this to your `AGENTS.md` or `CLAUDE.md`:
+
+```markdown
+## Memory OS
+
+Run `memory_os search "<topic>"` before starting any task.
+After completing a task, append a capsule to `agent_context/task_capsules.jsonl`.
+Run `memory_os sync` after any memory update.
+```
+
+## Templates
+
+Copy files from `templates/` into your project's `agent_context/`:
+
+- `templates/CONTEXT.md` — project context template
+- `templates/HANDSHAKE.md` — agent session handoff template  
+- `templates/WORKFLOWS.md` — 12-step task scale
+- `templates/SWARM_PROTOCOL.md` — multi-agent orchestration protocol
+
+## Architecture
+
+See `src/memory_os/docs/ARCHITECTURE.md` for the full system design.

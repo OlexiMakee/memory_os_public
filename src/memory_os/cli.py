@@ -16,8 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Load .env from project root so LLM API keys are available
-_env_file = ROOT / ".env"
+# Load .env from the current working directory (the user's project root)
+_env_file = Path.cwd() / ".env"
 if _env_file.exists():
     for _line in _env_file.read_text(encoding="utf-8").splitlines():
         _line = _line.strip()
@@ -1050,8 +1050,25 @@ def cmd_linear_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     return 0 if success else 1
 
 
+class _CleanHelpFormatter(argparse.HelpFormatter):
+    """Hides subcommands registered with help=argparse.SUPPRESS."""
+    def _format_action(self, action):
+        if action.help == argparse.SUPPRESS:
+            return ""
+        result = super()._format_action(action)
+        # Also strip SUPPRESS entries from subparsers choice list
+        if hasattr(action, "_choices_actions"):
+            action._choices_actions = [
+                a for a in action._choices_actions if a.help != argparse.SUPPRESS
+            ]
+        return result
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Memory OS project-local CLI.")
+    parser = argparse.ArgumentParser(
+        description="Memory OS project-local CLI.",
+        formatter_class=_CleanHelpFormatter,
+    )
     parser.add_argument("--root", default=".", help="Project root")
     parser.add_argument("--config", help="Path to memory_os.config.json file")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1129,31 +1146,22 @@ def build_parser() -> argparse.ArgumentParser:
     transition_parser.add_argument("--validator", default="cli_transition", help="Validator name recorded in events.jsonl.")
     transition_parser.set_defaults(func=cmd_transition)
 
-    graph_map_parser = subparsers.add_parser(
-        "graph-map",
-        help="Compute god nodes and module clusters from snapshot; write agent_context/codebase_map.md.",
-    )
-    graph_map_parser.add_argument("--emit-nodes", action="store_true", help="Also write module_cluster nodes into memory/nodes.jsonl.")
+    graph_map_parser = subparsers.add_parser("graph-map", help=argparse.SUPPRESS)
+    graph_map_parser.add_argument("--emit-nodes", action="store_true")
     graph_map_parser.add_argument("--format", choices={"json", "text"}, default="text")
     graph_map_parser.set_defaults(func=cmd_graph_map)
 
-    analyze_os_parser = subparsers.add_parser(
-        "analyze-os",
-        help="Analyze Memory OS algorithms and LLM telemetry to generate actionable insights."
-    )
-    analyze_os_parser.add_argument("-v", "--verbose", action="store_true", help="Print the local digest sent to LLM")
+    analyze_os_parser = subparsers.add_parser("analyze-os", help=argparse.SUPPRESS)
+    analyze_os_parser.add_argument("-v", "--verbose", action="store_true")
     analyze_os_parser.set_defaults(func=cmd_analyze_os)
 
-    giant_scan_parser = subparsers.add_parser(
-        "giant-scan",
-        help="Full-context audit: send entire codebase + Memory OS graph to a large-context LLM."
-    )
-    giant_scan_parser.add_argument("--provider", default="gemini", help="LLM provider")
-    giant_scan_parser.add_argument("--model", default="gemini-2.5-pro", help="LLM model ID")
-    giant_scan_parser.add_argument("--force", action="store_true", help="Allow repos >500K chars")
-    giant_scan_parser.add_argument("--dry-run", action="store_true", help="Collect stats without LLM call")
+    giant_scan_parser = subparsers.add_parser("giant-scan", help=argparse.SUPPRESS)
+    giant_scan_parser.add_argument("--provider", default="gemini")
+    giant_scan_parser.add_argument("--model", default="gemini-2.5-pro")
+    giant_scan_parser.add_argument("--force", action="store_true")
+    giant_scan_parser.add_argument("--dry-run", action="store_true")
     giant_scan_parser.add_argument("--format", choices={"json", "markdown"}, default="markdown")
-    giant_scan_parser.add_argument("--target-dir", default=None, help="Specific subdirectory to scan (relative to root).")
+    giant_scan_parser.add_argument("--target-dir", default=None)
     giant_scan_parser.set_defaults(func=cmd_giant_scan)
 
     search_parser = subparsers.add_parser(
@@ -1165,56 +1173,38 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--json", action="store_true", help="Output raw JSON instead of human-readable text.")
     search_parser.set_defaults(func=cmd_search)
 
-    stats_parser = subparsers.add_parser(
-        "stats",
-        help="Print LLM telemetry, costs, and latencies as a YAML dashboard.",
-    )
+    stats_parser = subparsers.add_parser("stats", help=argparse.SUPPRESS)
     stats_parser.set_defaults(func=cmd_stats)
 
-    rag_parser = subparsers.add_parser(
-        "rag",
-        help="Search memory based on task description and output active_memory.yaml for RAG.",
-    )
-    rag_parser.add_argument("query", help="Task description to search memory for.")
+    rag_parser = subparsers.add_parser("rag", help=argparse.SUPPRESS)
+    rag_parser.add_argument("query")
     rag_parser.set_defaults(func=cmd_rag)
 
-    ingest_parser = subparsers.add_parser(
-        "ingest-transcript",
-        help="Extract completed tasks from IDE session transcript to task_capsules.jsonl."
-    )
-    ingest_parser.add_argument("log_file", help="Path to transcript.jsonl")
-    ingest_parser.add_argument("--provider", help="Optional provider override", default="gemini")
-    ingest_parser.add_argument("--model", help="Optional model override", default="")
+    ingest_parser = subparsers.add_parser("ingest-transcript", help=argparse.SUPPRESS)
+    ingest_parser.add_argument("log_file")
+    ingest_parser.add_argument("--provider", default="gemini")
+    ingest_parser.add_argument("--model", default="")
     ingest_parser.set_defaults(func=cmd_ingest_transcript)
 
-    compile_parser = subparsers.add_parser(
-        "compile-prompt",
-        help="Compile generic Memory OS context into a single system prompt."
-    )
+    compile_parser = subparsers.add_parser("compile-prompt", help=argparse.SUPPRESS)
     compile_parser.set_defaults(func=cmd_compile_prompt)
 
-    persona_sync_parser = subparsers.add_parser(
-        "persona-sync",
-        help="Extract User Persona from a transcript log.",
-    )
-    persona_sync_parser.add_argument("log_file", help="Path to transcript.jsonl")
-    persona_sync_parser.add_argument("--provider", help="Optional provider override", default="gemini")
-    persona_sync_parser.add_argument("--model", help="Optional model override", default="")
+    persona_sync_parser = subparsers.add_parser("persona-sync", help=argparse.SUPPRESS)
+    persona_sync_parser.add_argument("log_file")
+    persona_sync_parser.add_argument("--provider", default="gemini")
+    persona_sync_parser.add_argument("--model", default="")
     persona_sync_parser.set_defaults(func=cmd_persona_sync)
 
-    persona_parser = subparsers.add_parser(
-        "persona",
-        help="Print the current User Persona profile.",
-    )
+    persona_parser = subparsers.add_parser("persona", help=argparse.SUPPRESS)
     persona_parser.set_defaults(func=cmd_persona)
 
-    daemon_parser = subparsers.add_parser("daemon", help="Manage the background memory ingestion daemon.")
-    daemon_parser.add_argument("daemon_action", choices=["start", "stop", "status"], help="Action to perform.")
-    daemon_parser.add_argument("--log-file", help="Path to transcript.jsonl (defaults to agent_context/transcript.jsonl)")
+    daemon_parser = subparsers.add_parser("daemon", help=argparse.SUPPRESS)
+    daemon_parser.add_argument("daemon_action", choices=["start", "stop", "status"])
+    daemon_parser.add_argument("--log-file")
     daemon_parser.set_defaults(func=cmd_daemon)
 
-    monitor_parser = subparsers.add_parser("monitor", help="Monitor real-time logs of the background daemon.")
-    monitor_parser.add_argument("--all", action="store_true", help="Show full history instead of tailing from end.")
+    monitor_parser = subparsers.add_parser("monitor", help=argparse.SUPPRESS)
+    monitor_parser.add_argument("--all", action="store_true")
     monitor_parser.set_defaults(func=cmd_monitor)
 
     internal_daemon_parser = subparsers.add_parser("_run_daemon_blocking", help=argparse.SUPPRESS)
@@ -1228,7 +1218,7 @@ def build_parser() -> argparse.ArgumentParser:
     approve_parser.add_argument("node_id", help="ID of the draft node to approve.")
     approve_parser.set_defaults(func=cmd_approve)
 
-    db_optimize_parser = subparsers.add_parser("db-optimize", help="Optimize FTS5 indexes and VACUUM the database.")
+    db_optimize_parser = subparsers.add_parser("db-optimize", help=argparse.SUPPRESS)
     db_optimize_parser.set_defaults(func=cmd_db_optimize)
 
     triage_parser = subparsers.add_parser(
@@ -1258,21 +1248,17 @@ def build_parser() -> argparse.ArgumentParser:
     backlinks_parser.add_argument("--json", action="store_true", help="Output raw JSON.")
     backlinks_parser.set_defaults(func=cmd_backlinks)
 
-    unlinked_parser = subparsers.add_parser(
-        "unlinked",
-        help="Scan node summaries and task capsules for textual node ID mentions without edges.",
-    )
-    unlinked_parser.add_argument("--json", action="store_true", help="Output raw JSON.")
+    unlinked_parser = subparsers.add_parser("unlinked", help=argparse.SUPPRESS)
+    unlinked_parser.add_argument("--json", action="store_true")
     unlinked_parser.set_defaults(func=cmd_unlinked)
 
-
-    ide_grant_parser = subparsers.add_parser("ide-grant", help="Enable autonomous execution for the IDE agent.")
+    ide_grant_parser = subparsers.add_parser("ide-grant", help=argparse.SUPPRESS)
     ide_grant_parser.set_defaults(func=cmd_ide_grant)
 
-    obsidian_parser = subparsers.add_parser("export-obsidian", help="Export Memory OS graph to an Obsidian Vault.")
+    obsidian_parser = subparsers.add_parser("export-obsidian", help=argparse.SUPPRESS)
     obsidian_parser.set_defaults(func=cmd_export_obsidian)
-    
-    linear_parser = subparsers.add_parser("linear-sync", help="Two-way sync of GLOBAL_ROADMAP.md with Linear issues.")
+
+    linear_parser = subparsers.add_parser("linear-sync", help=argparse.SUPPRESS)
     linear_parser.set_defaults(func=cmd_linear_sync)
 
 

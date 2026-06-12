@@ -1,5 +1,0 @@
-{"source": "system.dependency_routing.full_module_paths", "target": "system.cli.single_entrypoint", "type": "depends_on"}
-{"source": "agent.governance.owner_override_authority", "target": "workflow.control_plane.giant_memory_os_first", "type": "secures"}
-{"source": "memory.compaction.batch_processing", "target": "automation.lifecycle.approval_gated", "type": "depends_on"}
-{"source": "memory.compaction.incremental_node_appending", "target": "memory.compaction.batch_processing", "type": "triggers"}
-{"source": "system.validation.native_checks_for_lightweight_contracts", "target": "memory.compaction.node_type_expansion", "type": "triggers"}
