@@ -116,7 +116,9 @@ async function initApp() {
 
   updateStatsAndPanel();
   updateLegend();
-  if (window.applyAllSettingsSafely) window.applyAllSettingsSafely();
+  if (window.applyAllSettingsSafely) {
+    setTimeout(() => { window.applyAllSettingsSafely(); }, 100);
+  }
 }
 
 function cycleConnectionFilter() {
@@ -662,26 +664,26 @@ function applySettingsToUI(s) {
 
 function applySettingsToGraph(s) {
   if (!Graph) return;
-  try { Graph.nodeResolution(s.nodeRes); } catch(e){}
+  try { Graph.nodeResolution(Number(s.nodeRes)); } catch(e){}
   try { Graph.linkDirectionalParticles(link => {
     const sId = typeof link.source === 'object' ? link.source.id : link.source;
-    return (nodeDegrees[sId] > 3) ? s.particleDensity : 0;
+    return (nodeDegrees[sId] > 3) ? Number(s.particleDensity) : 0;
   }); } catch(e){}
-  try { Graph.linkDirectionalParticleSpeed(s.particleSpeed); } catch(e){}
-  try { Graph.linkDirectionalParticleWidth(s.particleWidth); } catch(e){}
+  try { Graph.linkDirectionalParticleSpeed(Number(s.particleSpeed)); } catch(e){}
+  try { Graph.linkDirectionalParticleWidth(Number(s.particleWidth)); } catch(e){}
   try { 
     if (Graph.d3Force('link')) { 
-      Graph.d3Force('link').distance(s.linkDist); 
+      Graph.d3Force('link').distance(Number(s.linkDist)); 
       if (Graph.graphData() && Graph.graphData().nodes && Graph.graphData().nodes.length > 0) Graph.d3ReheatSimulation(); 
     } 
   } catch(e){}
   try { 
     if (Graph.d3Force('charge')) { 
-      Graph.d3Force('charge').strength(s.chargeForce); 
+      Graph.d3Force('charge').strength(Number(s.chargeForce)); 
       if (Graph.graphData() && Graph.graphData().nodes && Graph.graphData().nodes.length > 0) Graph.d3ReheatSimulation(); 
     } 
   } catch(e){}
-  try { if (typeof Graph.d3VelocityDecay === 'function') Graph.d3VelocityDecay(s.velocityDecay); } catch(e){}
+  try { if (typeof Graph.d3VelocityDecay === 'function') Graph.d3VelocityDecay(Number(s.velocityDecay)); } catch(e){}
 }
 
 window.applyAllSettingsSafely = function() {
