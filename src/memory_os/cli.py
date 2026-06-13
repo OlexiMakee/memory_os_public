@@ -277,6 +277,31 @@ def cmd_compress(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     compactor = MemoryCompactor(config)
     return compactor.compress_graph(provider=args.provider, model=args.model, dry_run=args.dry_run)
 
+def cmd_link_infer(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.toolkit.link_inferrer import LinkInferrer
+    inferrer = LinkInferrer(config)
+    return inferrer.run(
+        method=args.method,
+        dry_run=args.dry_run,
+        min_score=args.min_score,
+        provider=getattr(args, "provider", None),
+        model=getattr(args, "model", None),
+        batch_size=args.batch_size,
+    )
+
+def cmd_pipeline(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.toolkit.pipeline import PipelineRunner
+    runner = PipelineRunner(config)
+    return runner.run(
+        pipeline_name=args.name,
+        custom_steps=getattr(args, "steps", None),
+        notion_key=getattr(args, "notion_key", None),
+        notion_db=getattr(args, "notion_db", None),
+        provider=getattr(args, "provider", None),
+        model=getattr(args, "model", None),
+        dry_run=args.dry_run,
+    )
+
 def cmd_prune(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     root = Path(args.root).resolve()
     lifecycle = LifecycleManager(config)
@@ -1119,6 +1144,39 @@ def cmd_linear_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     success = sync_roadmap_with_linear(root_dir)
     return 0 if success else 1
 
+def cmd_notion_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.toolkit.notion_sync import sync_with_notion
+    success = sync_with_notion(
+        config=config,
+        notion_api_key=args.api_key,
+        notion_database_id=args.database_id,
+        to_capsules=args.to_capsules
+    )
+    return 0 if success else 1
+
+def cmd_gdrive_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.toolkit.gdrive_sync import sync_with_gdrive
+    success = sync_with_gdrive(
+        config=config,
+        access_token=args.token,
+        folder_id=args.folder_id,
+        to_capsules=args.to_capsules
+    )
+    return 0 if success else 1
+
+def cmd_export_3d(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.toolkit.graph_visualizer import generate_3d_graph_visualization
+    success = generate_3d_graph_visualization(config)
+    if success:
+        print("\n[✓] 3D Graph successfully exported to memory_graph_3d.html!")
+        print("Double-click the file to open it in your web browser.\n")
+        return 0
+    return 1
+
+
+
+
+
 def cmd_doctor(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     import sqlite3
     root = Path(args.root).resolve()
@@ -1296,6 +1354,67 @@ def build_parser() -> argparse.ArgumentParser:
     compress_parser.add_argument("--dry-run", action="store_true", help="Show what would be merged without writing.")
     compress_parser.set_defaults(func=cmd_compress)
 
+    link_infer_parser = subparsers.add_parser(
+        "link-infer",
+        help="Automatically discover and add edges between memory nodes.",
+    )
+    link_infer_parser.add_argument(
+        "--method",
+        choices=["text", "llm", "both"],
+        default="both",
+        help="Edge discovery method: text (offline keyword matching), llm (semantic via LLM), both (default).",
+    )
+    link_infer_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print proposed edges without writing to edges.jsonl.",
+    )
+    link_infer_parser.add_argument(
+        "--min-score",
+        type=float,
+        default=0.3,
+        help="Minimum confidence score for text-matching method (0.0–1.0, default 0.3).",
+    )
+    link_infer_parser.add_argument(
+        "--provider",
+        default=None,
+        help="LLM provider override (gemini, openrouter, openai).",
+    )
+    link_infer_parser.add_argument(
+        "--model",
+        default=None,
+        help="LLM model override.",
+    )
+    link_infer_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=60,
+        help="Number of nodes per LLM batch (default 60).",
+    )
+    link_infer_parser.set_defaults(func=cmd_link_infer)
+
+    pipeline_parser = subparsers.add_parser(
+        "pipeline",
+        help="Run a named sequence of memory_os operations in one command.",
+    )
+    pipeline_parser.add_argument(
+        "name",
+        nargs="?",
+        default="list",
+        help="Pipeline name: ingest | refresh | full | custom | list (default: list).",
+    )
+    pipeline_parser.add_argument(
+        "steps",
+        nargs="*",
+        help="For 'custom' pipeline: sequence of memory_os subcommands to run.",
+    )
+    pipeline_parser.add_argument("--notion-key", default=None, help="Notion API key (triggers notion-sync step).")
+    pipeline_parser.add_argument("--notion-db", default=None, help="Notion database ID.")
+    pipeline_parser.add_argument("--provider", default=None, help="LLM provider for LLM steps.")
+    pipeline_parser.add_argument("--model", default=None, help="LLM model override.")
+    pipeline_parser.add_argument("--dry-run", action="store_true", help="Print steps without executing.")
+    pipeline_parser.set_defaults(func=cmd_pipeline)
+
     prune_parser = subparsers.add_parser(
         "prune",
         help="Archive stale and superseded memory nodes and edges.",
@@ -1424,6 +1543,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     linear_parser = subparsers.add_parser("linear-sync", help=argparse.SUPPRESS)
     linear_parser.set_defaults(func=cmd_linear_sync)
+
+    notion_parser = subparsers.add_parser("notion-sync", help="Synchronize memory nodes from a Notion database.")
+    notion_parser.add_argument("--api-key", help="Notion Integration Token (NOTION_API_KEY).")
+    notion_parser.add_argument("--database-id", help="Notion Database ID (NOTION_DATABASE_ID).")
+    notion_parser.add_argument("--to-capsules", action="store_true", help="Import Notion pages as task capsules instead of memory nodes.")
+    notion_parser.set_defaults(func=cmd_notion_sync)
+
+    gdrive_parser = subparsers.add_parser("gdrive-sync", help="Synchronize memory nodes from a Google Drive folder.")
+    gdrive_parser.add_argument("--token", help="Google Drive Access Token (GDRIVE_ACCESS_TOKEN).")
+    gdrive_parser.add_argument("--folder-id", help="Google Drive Folder ID (GDRIVE_FOLDER_ID).")
+    gdrive_parser.add_argument("--to-capsules", action="store_true", help="Import Google Drive documents as task capsules instead of memory nodes.")
+    gdrive_parser.set_defaults(func=cmd_gdrive_sync)
+
+    export_3d_parser = subparsers.add_parser("export-3d", help="Export memory graph as an interactive 3D HTML page.")
+    export_3d_parser.set_defaults(func=cmd_export_3d)
+
+
+
+
 
     doctor_parser = subparsers.add_parser("doctor", help="Check system dependencies, files, DB, and environment.")
     doctor_parser.set_defaults(func=cmd_doctor)

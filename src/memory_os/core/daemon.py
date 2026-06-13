@@ -18,40 +18,86 @@ from memory_os.core.config import MemoryOSConfig
 from memory_os.toolkit.transcript_ingestor import TranscriptIngestor
 from memory_os.core.alerts import AlertManager
 from memory_os.toolkit.analyzer import OSPerformanceAnalyzer
+from memory_os.core.auditors import AuditorManager, MockMLEmbeddingAuditor, MockOllamaAuditor
+from urllib.parse import urlparse, parse_qs
 
 class DaemonHttpHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
     def do_GET(self):
-        if self.path == "/status":
+        parsed = urlparse(self.path)
+        if parsed.path == "/status":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             status_data = self.server.daemon.get_status_dict()
             self.wfile.write(json.dumps(status_data).encode("utf-8"))
+        elif parsed.path == "/auditors/status":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            
+            status_data = self.server.daemon.auditor_manager.get_status()
+            
+            # Basic CPU metric using loadavg
+            try:
+                load1, load5, load15 = os.getloadavg()
+                cpu_percent = min(100.0, (load1 / os.cpu_count()) * 100)
+            except Exception:
+                cpu_percent = 0.0
+                
+            resp = {
+                "auditors": status_data,
+                "metrics": {
+                    "cpu_percent": round(cpu_percent, 1),
+                    "ram_percent": 45.0  # Placeholder without psutil
+                }
+            }
+            self.wfile.write(json.dumps(resp).encode("utf-8"))
         else:
             self.send_response(404)
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
 
     def do_POST(self):
-        if self.path == "/sync":
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        name = qs.get("name", [""])[0]
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        if parsed.path == "/sync":
             self.server.daemon.logger.info("IPC request: Triggering manual sync")
             self.server.daemon.check_file(force=True)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
             self.wfile.write(json.dumps({"status": "sync_triggered"}).encode("utf-8"))
-        elif self.path == "/stop":
+        elif parsed.path == "/stop":
             self.server.daemon.logger.info("IPC request: Shutting down daemon")
             self.server.daemon.is_running = False
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
             self.wfile.write(json.dumps({"status": "stopping"}).encode("utf-8"))
+        elif parsed.path == "/auditors/start":
+            self.server.daemon.auditor_manager.start_auditor(name)
+            self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+        elif parsed.path == "/auditors/pause":
+            self.server.daemon.auditor_manager.pause_auditor(name)
+            self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+        elif parsed.path == "/auditors/stop":
+            self.server.daemon.auditor_manager.stop_auditor(name)
+            self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
         else:
-            self.send_response(404)
-            self.end_headers()
+            # Override 200 sent above for 404
+            pass
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.end_headers()
 
 class ScheduleEngine:
     def __init__(self):
@@ -93,6 +139,10 @@ class MemoryDaemon:
         self._setup_logging()
         self.last_mtime = 0.0
         self.http_server = None
+
+        self.auditor_manager = AuditorManager()
+        self.auditor_manager.register(MockMLEmbeddingAuditor())
+        self.auditor_manager.register(MockOllamaAuditor())
 
         self.scheduler = ScheduleEngine()
         # Watch transcript every 5 seconds
@@ -327,6 +377,7 @@ class MemoryDaemon:
                 self.logger.info("Stopping IPC Server...")
                 self.http_server.shutdown()
                 self.http_server.server_close()
+            self.auditor_manager.shutdown()
             self.logger.info("Daemon stopped.")
             self.remove_pid()
             # Update status to stopped

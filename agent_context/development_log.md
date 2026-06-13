@@ -40,3 +40,15 @@
 - **Feature**: Updated [cli.py](file:///Users/oleksii/Documents/memory_os/src/memory_os/cli.py) to enable `daemon stop`, `daemon status`, and a new `daemon sync` subcommand to communicate directly with the running daemon process over HTTP.
 - **Feature**: Implemented background Time & Volume Triggered Auto-Compaction inside `MemoryDaemon` that scans for uncompacted capsules, checks the daily token budget using `BudgetManager`, and invokes the LLM compactor when $\ge 3$ uncompacted capsules are found.
 - **Verification**: Extended automated integration test suite in [test_auto.py](file:///Users/oleksii/Documents/memory_os/test_auto.py) with `test_daemon_ipc_server` and `test_daemon_auto_compaction` verifying status, sync, stop, and budget skip rules. All integration tests passed successfully.
+
+## 2026-06-13: Knowledge Base Tools Integration
+- **Feature**: Ported new toolkit modules from the `knowledge_base` repository directly into `memory_os/src/memory_os/toolkit/`.
+- **Implementation**: Integrated `link_inferrer.py` (LLM/text semantic edge discovery), `pipeline.py` (chained task execution), `notion_sync.py` (Notion DB memory extraction), `gdrive_sync.py` (Google Drive document extraction), and `graph_visualizer.py` (interactive 3D HTML export).
+- **CLI**: Registered 5 new commands in `cli.py`: `notion-sync`, `gdrive-sync`, `export-3d`, `link-infer`, and `pipeline`.
+- **Verification**: Validated that all commands are properly rendered in the CLI help menu and the syntax is error-free.
+
+## 2026-06-13: 3D Graph Adaptive UI & Background Auditors
+- **Feature**: Refactored `graph_visualizer.py` to use a responsive flexbox layout for HUD panels, preventing vertical overlap on small screens and fixing hardware metric panel text clipping.
+- **Feature**: Added realtime `AuditorManager` and HTTP IPC monitoring for background daemon tasks (Ollama / ML mock auditors). Integrated system CPU/RAM usage tracking.
+- **UI/UX**: Implemented copy-to-clipboard helper buttons in the UI for daemon start/stop CLI commands as a secure workaround for browser terminal execution limitations.
+- **Fix**: Adjusted 3D force graph link rendering to use 1px faint lines for weak connections to prevent distant peripheral nodes from disappearing due to WebGL perspective clipping.
