@@ -92,7 +92,21 @@
               <span>Node Resolution</span>
               <span id="node-res-val">8</span>
             </div>
-            <input type="range" id="node-res-slider" min="4" max="32" step="2" value="8" style="width: 100%;">
+            <input type="range" id="node-res-slider" min="4" max="32" step="2" value="8" style="width: 100%; margin-bottom: 10px;">
+
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <span style="font-size: 11px; color: var(--text-main);">Show Leaf Links</span>
+              <label class="switch" style="position: relative; display: inline-block; width: 34px; height: 20px;">
+                <input type="checkbox" id="show-leaf-links-toggle" style="opacity: 0; width: 0; height: 0;">
+                <span class="slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.2); transition: .4s; border-radius: 20px;">
+                  <span class="slider-dot" style="position: absolute; content: ''; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%;"></span>
+                </span>
+              </label>
+              <style>
+                #show-leaf-links-toggle:checked + .slider { background-color: var(--accent-blue); }
+                #show-leaf-links-toggle:checked + .slider .slider-dot { transform: translateX(14px); }
+              </style>
+            </div>
           </div>
           
           <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">

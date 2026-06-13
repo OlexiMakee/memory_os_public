@@ -89,6 +89,8 @@ async function initApp() {
     .linkWidth(link => {
       const sId = typeof link.source === 'object' ? link.source.id : link.source;
       const tId = typeof link.target === 'object' ? link.target.id : link.target;
+      
+      if (window.showLeafLinks) return 1.0;
       return (nodeDegrees[sId] > 2 && nodeDegrees[tId] > 2) ? 1.0 : 0;
     })
     .linkColor(link => {
@@ -611,7 +613,8 @@ const defaultSettings = {
   chargeForce: -120,
   velocityDecay: 0.4,
   autoRotate: false,
-  autoRotateSpeed: 1.0
+  autoRotateSpeed: 1.0,
+  showLeafLinks: false
 };
 
 const SETTINGS_KEY = 'memory_os_graph_settings';
@@ -671,17 +674,25 @@ function applySettingsToUI(s) {
     document.getElementById('auto-rotate-speed-val').innerText = s.autoRotateSpeed;
     window.currentAutoRotateSpeed = Number(s.autoRotateSpeed);
   }
+  if (document.getElementById('show-leaf-links-toggle')) {
+    document.getElementById('show-leaf-links-toggle').checked = s.showLeafLinks;
+    window.showLeafLinks = s.showLeafLinks;
+  }
 }
 
 function applySettingsToGraph(s) {
   if (!Graph) return;
-  try { Graph.nodeResolution(Number(s.nodeRes)); } catch(e){}
-  try { Graph.linkDirectionalParticles(link => {
+  try { if (typeof Graph.nodeResolution === 'function') Graph.nodeResolution(Number(s.nodeRes)); } catch(e){}
+  try { if (typeof Graph.linkDirectionalParticles === 'function') Graph.linkDirectionalParticles(link => {
     const sId = typeof link.source === 'object' ? link.source.id : link.source;
     return (nodeDegrees[sId] > 3) ? Number(s.particleDensity) : 0;
   }); } catch(e){}
-  try { Graph.linkDirectionalParticleSpeed(Number(s.particleSpeed)); } catch(e){}
-  try { Graph.linkDirectionalParticleWidth(Number(s.particleWidth)); } catch(e){}
+  try { if (typeof Graph.linkDirectionalParticleSpeed === 'function') Graph.linkDirectionalParticleSpeed(Number(s.particleSpeed)); } catch(e){}
+  try { if (typeof Graph.linkDirectionalParticleWidth === 'function') Graph.linkDirectionalParticleWidth(Number(s.particleWidth)); } catch(e){}
+  
+  // Re-trigger link width function to apply showLeafLinks
+  try { if (typeof Graph.linkWidth === 'function') Graph.linkWidth(Graph.linkWidth()); } catch(e){}
+
   try { 
     if (Graph.d3Force('link')) { 
       Graph.d3Force('link').distance(Number(s.linkDist)); 
@@ -804,6 +815,14 @@ if (document.getElementById('auto-rotate-speed-slider')) {
     document.getElementById('auto-rotate-speed-val').innerText = val;
     window.currentAutoRotateSpeed = val;
     saveSetting('autoRotateSpeed', val);
+  });
+}
+
+if (document.getElementById('show-leaf-links-toggle')) {
+  document.getElementById('show-leaf-links-toggle').addEventListener('change', (e) => {
+    window.showLeafLinks = e.target.checked;
+    saveSetting('showLeafLinks', window.showLeafLinks);
+    if (Graph && typeof Graph.linkWidth === 'function') Graph.linkWidth(Graph.linkWidth());
   });
 }
 
