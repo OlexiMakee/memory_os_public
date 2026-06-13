@@ -71,7 +71,7 @@
       </div>
       
       <!-- Body -->
-      <div id="settings-accordion-body" style="padding: 0 24px 24px 24px; display: none;">
+      <div id="settings-accordion-body" style="padding: 0 24px 24px 24px; display: none; max-height: 40vh; overflow-y: auto;">
         <div style="display: flex; flex-direction: column; gap: 12px;">
           <div>
             <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
@@ -86,22 +86,46 @@
           </div>
           
           <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
-            <h3 style="font-size: 11px; margin-top: 0; margin-bottom: 8px; color: var(--text-muted);"><i class="fa-solid fa-eye"></i> Visuals</h3>
+            <h3 style="font-size: 11px; margin-top: 0; margin-bottom: 8px; color: var(--text-muted);"><i class="fa-solid fa-eye"></i> Appearance</h3>
+            
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
+              <span>Node Size Multiplier</span>
+              <span id="node-size-val">1.0</span>
+            </div>
+            <input type="range" id="node-size-slider" min="0.1" max="3" step="0.1" value="1.0" style="width: 100%; margin-bottom: 10px;">
+            
             <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
               <span>Node Resolution</span>
               <span id="node-res-val">8</span>
             </div>
-            <input type="range" id="node-res-slider" min="4" max="32" step="2" value="8" style="width: 100%; margin-bottom: 10px;">
+            <input type="range" id="node-res-slider" min="4" max="32" step="2" value="8" style="width: 100%;">
+          </div>
+          
+          <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
+            <h3 style="font-size: 11px; margin-top: 0; margin-bottom: 8px; color: var(--text-muted);"><i class="fa-solid fa-sparkles"></i> Particles</h3>
+            
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
+              <span>Particle Density (per link)</span>
+              <span id="particle-density-val">2</span>
+            </div>
+            <input type="range" id="particle-density-slider" min="0" max="10" step="1" value="2" style="width: 100%; margin-bottom: 10px;">
             
             <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
               <span>Particle Speed</span>
               <span id="particle-speed-val">0.005</span>
             </div>
-            <input type="range" id="particle-speed-slider" min="0" max="0.02" step="0.001" value="0.005" style="width: 100%;">
+            <input type="range" id="particle-speed-slider" min="0" max="0.02" step="0.001" value="0.005" style="width: 100%; margin-bottom: 10px;">
+            
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
+              <span>Particle Width</span>
+              <span id="particle-width-val">1.8</span>
+            </div>
+            <input type="range" id="particle-width-slider" min="0.5" max="5.0" step="0.1" value="1.8" style="width: 100%;">
           </div>
           
           <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
             <h3 style="font-size: 11px; margin-top: 0; margin-bottom: 8px; color: var(--text-muted);"><i class="fa-solid fa-atom"></i> Physics</h3>
+            
             <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
               <span>Link Distance</span>
               <span id="link-dist-val">40</span>
@@ -112,7 +136,13 @@
               <span>Charge Force</span>
               <span id="charge-force-val">-120</span>
             </div>
-            <input type="range" id="charge-force-slider" min="-300" max="0" step="10" value="-120" style="width: 100%;">
+            <input type="range" id="charge-force-slider" min="-300" max="0" step="10" value="-120" style="width: 100%; margin-bottom: 10px;">
+            
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
+              <span>Velocity Decay (Friction)</span>
+              <span id="velocity-decay-val">0.4</span>
+            </div>
+            <input type="range" id="velocity-decay-slider" min="0" max="1" step="0.05" value="0.4" style="width: 100%;">
           </div>
 
           <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; display: flex; align-items: center; justify-content: space-between;">
@@ -127,6 +157,12 @@
               #auto-rotate-toggle:checked + .slider { background-color: var(--accent-blue); }
               #auto-rotate-toggle:checked + .slider .slider-dot { transform: translateX(14px); }
             </style>
+          </div>
+          
+          <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
+            <button id="reset-settings-btn" style="width: 100%; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2); color: #ef4444; border-radius: 4px; cursor: pointer; padding: 6px 12px; font-size: 11px; transition: background 0.2s;">
+              Reset to Defaults
+            </button>
           </div>
         </div>
       </div>

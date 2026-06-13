@@ -116,6 +116,7 @@ async function initApp() {
 
   updateStatsAndPanel();
   updateLegend();
+  if (window.applyAllSettingsSafely) window.applyAllSettingsSafely();
 }
 
 function cycleConnectionFilter() {
@@ -593,40 +594,206 @@ window.toggleSettingsAccordion = function() {
   }
 };
 
-document.getElementById('particle-speed-slider').addEventListener('input', (e) => {
-  const val = parseFloat(e.target.value);
-  document.getElementById('particle-speed-val').innerText = val;
-  if (Graph) Graph.linkDirectionalParticleSpeed(val);
-});
+// Settings Config
+const defaultSettings = {
+  nodeSize: 1.0,
+  nodeRes: 8,
+  particleDensity: 2,
+  particleSpeed: 0.005,
+  particleWidth: 1.8,
+  linkDist: 40,
+  chargeForce: -120,
+  velocityDecay: 0.4,
+  autoRotate: false
+};
 
-document.getElementById('link-dist-slider').addEventListener('input', (e) => {
-  const val = parseFloat(e.target.value);
-  document.getElementById('link-dist-val').innerText = val;
-  if (Graph) {
-    Graph.d3Force('link').distance(val);
-    Graph.d3ReheatSimulation();
+const SETTINGS_KEY = 'memory_os_graph_settings';
+
+function loadSettings() {
+  let saved = { ...defaultSettings };
+  try {
+    const data = localStorage.getItem(SETTINGS_KEY);
+    if (data) saved = { ...saved, ...JSON.parse(data) };
+  } catch(e) {}
+  return saved;
+}
+
+function saveSetting(key, val) {
+  let saved = loadSettings();
+  saved[key] = val;
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(saved));
+  } catch(e) {}
+}
+
+function applySettingsToUI(s) {
+  if (document.getElementById('node-size-slider')) {
+    document.getElementById('node-size-slider').value = s.nodeSize;
+    document.getElementById('node-size-val').innerText = s.nodeSize;
   }
-});
-
-document.getElementById('charge-force-slider').addEventListener('input', (e) => {
-  const val = parseFloat(e.target.value);
-  document.getElementById('charge-force-val').innerText = val;
-  if (Graph) {
-    Graph.d3Force('charge').strength(val);
-    Graph.d3ReheatSimulation();
+  if (document.getElementById('node-res-slider')) {
+    document.getElementById('node-res-slider').value = s.nodeRes;
+    document.getElementById('node-res-val').innerText = s.nodeRes;
   }
-});
+  if (document.getElementById('particle-density-slider')) {
+    document.getElementById('particle-density-slider').value = s.particleDensity;
+    document.getElementById('particle-density-val').innerText = s.particleDensity;
+  }
+  if (document.getElementById('particle-speed-slider')) {
+    document.getElementById('particle-speed-slider').value = s.particleSpeed;
+    document.getElementById('particle-speed-val').innerText = s.particleSpeed;
+  }
+  if (document.getElementById('particle-width-slider')) {
+    document.getElementById('particle-width-slider').value = s.particleWidth;
+    document.getElementById('particle-width-val').innerText = s.particleWidth;
+  }
+  if (document.getElementById('link-dist-slider')) {
+    document.getElementById('link-dist-slider').value = s.linkDist;
+    document.getElementById('link-dist-val').innerText = s.linkDist;
+  }
+  if (document.getElementById('charge-force-slider')) {
+    document.getElementById('charge-force-slider').value = s.chargeForce;
+    document.getElementById('charge-force-val').innerText = s.chargeForce;
+  }
+  if (document.getElementById('velocity-decay-slider')) {
+    document.getElementById('velocity-decay-slider').value = s.velocityDecay;
+    document.getElementById('velocity-decay-val').innerText = s.velocityDecay;
+  }
+  if (document.getElementById('auto-rotate-toggle')) {
+    document.getElementById('auto-rotate-toggle').checked = s.autoRotate;
+    isAutoRotate = s.autoRotate;
+  }
+}
 
-document.getElementById('node-res-slider').addEventListener('input', (e) => {
-  const val = parseInt(e.target.value);
-  document.getElementById('node-res-val').innerText = val;
-  if (Graph) Graph.nodeResolution(val);
-});
+function applySettingsToGraph(s) {
+  if (!Graph) return;
+  try { Graph.nodeRelSize(s.nodeSize * 4); } catch(e){}
+  try { Graph.nodeResolution(s.nodeRes); } catch(e){}
+  try { Graph.linkDirectionalParticles(link => {
+    const sId = typeof link.source === 'object' ? link.source.id : link.source;
+    return (nodeDegrees[sId] > 3) ? s.particleDensity : 0;
+  }); } catch(e){}
+  try { Graph.linkDirectionalParticleSpeed(s.particleSpeed); } catch(e){}
+  try { Graph.linkDirectionalParticleWidth(s.particleWidth); } catch(e){}
+  try { if (Graph.d3Force('link')) { Graph.d3Force('link').distance(s.linkDist); Graph.d3ReheatSimulation(); } } catch(e){}
+  try { if (Graph.d3Force('charge')) { Graph.d3Force('charge').strength(s.chargeForce); Graph.d3ReheatSimulation(); } } catch(e){}
+  try { if (typeof Graph.d3VelocityDecay === 'function') Graph.d3VelocityDecay(s.velocityDecay); } catch(e){}
+}
+
+window.applyAllSettingsSafely = function() {
+  const s = loadSettings();
+  applySettingsToUI(s);
+  applySettingsToGraph(s);
+};
+
+// Listeners
+if (document.getElementById('node-size-slider')) {
+  document.getElementById('node-size-slider').addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    document.getElementById('node-size-val').innerText = val;
+    saveSetting('nodeSize', val);
+    if (Graph) { try { Graph.nodeRelSize(val * 4); } catch(e){} }
+  });
+}
+
+if (document.getElementById('node-res-slider')) {
+  document.getElementById('node-res-slider').addEventListener('input', (e) => {
+    const val = parseInt(e.target.value);
+    document.getElementById('node-res-val').innerText = val;
+    saveSetting('nodeRes', val);
+    if (Graph) { try { Graph.nodeResolution(val); } catch(e){} }
+  });
+}
+
+if (document.getElementById('particle-density-slider')) {
+  document.getElementById('particle-density-slider').addEventListener('input', (e) => {
+    const val = parseInt(e.target.value);
+    document.getElementById('particle-density-val').innerText = val;
+    saveSetting('particleDensity', val);
+    if (Graph) {
+      try {
+        Graph.linkDirectionalParticles(link => {
+          const sId = typeof link.source === 'object' ? link.source.id : link.source;
+          return (nodeDegrees[sId] > 3) ? val : 0;
+        });
+      } catch(e){}
+    }
+  });
+}
+
+if (document.getElementById('particle-speed-slider')) {
+  document.getElementById('particle-speed-slider').addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    document.getElementById('particle-speed-val').innerText = val;
+    saveSetting('particleSpeed', val);
+    if (Graph) { try { Graph.linkDirectionalParticleSpeed(val); } catch(e){} }
+  });
+}
+
+if (document.getElementById('particle-width-slider')) {
+  document.getElementById('particle-width-slider').addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    document.getElementById('particle-width-val').innerText = val;
+    saveSetting('particleWidth', val);
+    if (Graph) { try { Graph.linkDirectionalParticleWidth(val); } catch(e){} }
+  });
+}
+
+if (document.getElementById('link-dist-slider')) {
+  document.getElementById('link-dist-slider').addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    document.getElementById('link-dist-val').innerText = val;
+    saveSetting('linkDist', val);
+    if (Graph) {
+      try {
+        if (Graph.d3Force('link')) Graph.d3Force('link').distance(val);
+        Graph.d3ReheatSimulation();
+      } catch(e){}
+    }
+  });
+}
+
+if (document.getElementById('charge-force-slider')) {
+  document.getElementById('charge-force-slider').addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    document.getElementById('charge-force-val').innerText = val;
+    saveSetting('chargeForce', val);
+    if (Graph) {
+      try {
+        if (Graph.d3Force('charge')) Graph.d3Force('charge').strength(val);
+        Graph.d3ReheatSimulation();
+      } catch(e){}
+    }
+  });
+}
+
+if (document.getElementById('velocity-decay-slider')) {
+  document.getElementById('velocity-decay-slider').addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    document.getElementById('velocity-decay-val').innerText = val;
+    saveSetting('velocityDecay', val);
+    if (Graph) {
+      try {
+        if (typeof Graph.d3VelocityDecay === 'function') Graph.d3VelocityDecay(val);
+      } catch(e){}
+    }
+  });
+}
 
 let isAutoRotate = false;
-document.getElementById('auto-rotate-toggle').addEventListener('change', (e) => {
-  isAutoRotate = e.target.checked;
-});
+if (document.getElementById('auto-rotate-toggle')) {
+  document.getElementById('auto-rotate-toggle').addEventListener('change', (e) => {
+    isAutoRotate = e.target.checked;
+    saveSetting('autoRotate', isAutoRotate);
+  });
+}
+
+if (document.getElementById('reset-settings-btn')) {
+  document.getElementById('reset-settings-btn').addEventListener('click', () => {
+    try { localStorage.removeItem(SETTINGS_KEY); } catch(e){}
+    window.applyAllSettingsSafely();
+  });
+}
 
 let autoRotateAngle = 0;
 setInterval(() => {
