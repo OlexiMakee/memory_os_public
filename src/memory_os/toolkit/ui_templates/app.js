@@ -57,6 +57,25 @@ async function initApp() {
     return (nodeDegrees[sId] > 2 && nodeDegrees[tId] > 2) ? 1.0 : 0;
   };
 
+  window.getLinkColor = function(link) {
+    const sId = typeof link.source === 'object' ? link.source.id : link.source;
+    const tId = typeof link.target === 'object' ? link.target.id : link.target;
+
+    if (searchQuery) {
+      const sNode = gData.nodes.find(n => n.id === sId);
+      const tNode = gData.nodes.find(n => n.id === tId);
+      const sMatches = sNode && (sNode.id.toLowerCase().includes(searchQuery) || (sNode.summary && sNode.summary.toLowerCase().includes(searchQuery)));
+      const tMatches = tNode && (tNode.id.toLowerCase().includes(searchQuery) || (tNode.summary && tNode.summary.toLowerCase().includes(searchQuery)));
+      
+      if (sMatches && tMatches) return 'rgba(255, 255, 255, 0.8)';
+      if (sMatches || tMatches) return 'rgba(148, 163, 184, 0.3)';
+      return 'rgba(148, 163, 184, 0.02)';
+    }
+    
+    if (nodeDegrees[sId] <= 2 || nodeDegrees[tId] <= 2) return 'rgba(255, 255, 255, 0.12)'; 
+    return 'rgba(148, 163, 184, 0.25)';
+  };
+
   // Calculate node connections (degrees)
   gData.nodes.forEach(n => { nodeDegrees[n.id] = 0; });
   gData.links.forEach(l => {
@@ -95,21 +114,7 @@ async function initApp() {
       return baseSize + Math.sqrt(deg) * 2;
     })
     .linkWidth(link => getLinkWidth(link))
-    .linkColor(link => {
-      const sId = typeof link.source === 'object' ? link.source.id : link.source;
-      const tId = typeof link.target === 'object' ? link.target.id : link.target;
-
-      if (searchQuery) {
-        const sNode = gData.nodes.find(n => n.id === sId);
-        const tNode = gData.nodes.find(n => n.id === tId);
-        const sMatches = sNode && (sNode.id.toLowerCase().includes(searchQuery) || sNode.summary.toLowerCase().includes(searchQuery));
-        const tMatches = tNode && (tNode.id.toLowerCase().includes(searchQuery) || tNode.summary.toLowerCase().includes(searchQuery));
-        if (!sMatches || !tMatches) return 'rgba(148, 163, 184, 0.03)';
-      }
-      
-      if (nodeDegrees[sId] <= 2 || nodeDegrees[tId] <= 2) return 'rgba(255, 255, 255, 0.12)'; 
-      return 'rgba(148, 163, 184, 0.25)';
-    })
+    .linkColor(link => window.getLinkColor(link))
     .linkDirectionalParticles(link => {
       const sId = typeof link.source === 'object' ? link.source.id : link.source;
       return (nodeDegrees[sId] > 3) ? 2 : 0;
@@ -394,7 +399,7 @@ function updateStatsAndPanel() {
       searchQuery = t;
       updateStatsAndPanel();
       Graph.nodeColor(getNodeColor);
-      Graph.linkColor(Graph.linkColor());
+      Graph.linkColor(link => window.getLinkColor(link));
     };
     item.innerHTML = `<span class="legend-item"><span class="color-dot" style="background:${dotColor};"></span> ${t}</span><span class="list-item-value">${typeCounts[t]}</span>`;
     typeBreakdownList.appendChild(item);
@@ -468,7 +473,7 @@ document.getElementById('search-input').addEventListener('input', (e) => {
   updateStatsAndPanel();
   if (Graph) {
     Graph.nodeColor(getNodeColor);
-    Graph.linkColor(Graph.linkColor());
+    Graph.linkColor(link => window.getLinkColor(link));
   }
 });
 
