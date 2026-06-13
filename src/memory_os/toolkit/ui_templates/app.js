@@ -596,7 +596,6 @@ window.toggleSettingsAccordion = function() {
 
 // Settings Config
 const defaultSettings = {
-  nodeSize: 1.0,
   nodeRes: 8,
   particleDensity: 2,
   particleSpeed: 0.005,
@@ -627,10 +626,6 @@ function saveSetting(key, val) {
 }
 
 function applySettingsToUI(s) {
-  if (document.getElementById('node-size-slider')) {
-    document.getElementById('node-size-slider').value = s.nodeSize;
-    document.getElementById('node-size-val').innerText = s.nodeSize;
-  }
   if (document.getElementById('node-res-slider')) {
     document.getElementById('node-res-slider').value = s.nodeRes;
     document.getElementById('node-res-val').innerText = s.nodeRes;
@@ -667,7 +662,6 @@ function applySettingsToUI(s) {
 
 function applySettingsToGraph(s) {
   if (!Graph) return;
-  try { Graph.nodeRelSize(s.nodeSize * 4); } catch(e){}
   try { Graph.nodeResolution(s.nodeRes); } catch(e){}
   try { Graph.linkDirectionalParticles(link => {
     const sId = typeof link.source === 'object' ? link.source.id : link.source;
@@ -675,8 +669,18 @@ function applySettingsToGraph(s) {
   }); } catch(e){}
   try { Graph.linkDirectionalParticleSpeed(s.particleSpeed); } catch(e){}
   try { Graph.linkDirectionalParticleWidth(s.particleWidth); } catch(e){}
-  try { if (Graph.d3Force('link')) { Graph.d3Force('link').distance(s.linkDist); Graph.d3ReheatSimulation(); } } catch(e){}
-  try { if (Graph.d3Force('charge')) { Graph.d3Force('charge').strength(s.chargeForce); Graph.d3ReheatSimulation(); } } catch(e){}
+  try { 
+    if (Graph.d3Force('link')) { 
+      Graph.d3Force('link').distance(s.linkDist); 
+      if (Graph.graphData() && Graph.graphData().nodes && Graph.graphData().nodes.length > 0) Graph.d3ReheatSimulation(); 
+    } 
+  } catch(e){}
+  try { 
+    if (Graph.d3Force('charge')) { 
+      Graph.d3Force('charge').strength(s.chargeForce); 
+      if (Graph.graphData() && Graph.graphData().nodes && Graph.graphData().nodes.length > 0) Graph.d3ReheatSimulation(); 
+    } 
+  } catch(e){}
   try { if (typeof Graph.d3VelocityDecay === 'function') Graph.d3VelocityDecay(s.velocityDecay); } catch(e){}
 }
 
@@ -687,15 +691,6 @@ window.applyAllSettingsSafely = function() {
 };
 
 // Listeners
-if (document.getElementById('node-size-slider')) {
-  document.getElementById('node-size-slider').addEventListener('input', (e) => {
-    const val = parseFloat(e.target.value);
-    document.getElementById('node-size-val').innerText = val;
-    saveSetting('nodeSize', val);
-    if (Graph) { try { Graph.nodeRelSize(val * 4); } catch(e){} }
-  });
-}
-
 if (document.getElementById('node-res-slider')) {
   document.getElementById('node-res-slider').addEventListener('input', (e) => {
     const val = parseInt(e.target.value);
@@ -747,7 +742,7 @@ if (document.getElementById('link-dist-slider')) {
     if (Graph) {
       try {
         if (Graph.d3Force('link')) Graph.d3Force('link').distance(val);
-        Graph.d3ReheatSimulation();
+        if (Graph.graphData() && Graph.graphData().nodes && Graph.graphData().nodes.length > 0) Graph.d3ReheatSimulation();
       } catch(e){}
     }
   });
@@ -761,7 +756,7 @@ if (document.getElementById('charge-force-slider')) {
     if (Graph) {
       try {
         if (Graph.d3Force('charge')) Graph.d3Force('charge').strength(val);
-        Graph.d3ReheatSimulation();
+        if (Graph.graphData() && Graph.graphData().nodes && Graph.graphData().nodes.length > 0) Graph.d3ReheatSimulation();
       } catch(e){}
     }
   });
