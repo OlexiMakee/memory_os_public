@@ -610,7 +610,8 @@ const defaultSettings = {
   linkDist: 40,
   chargeForce: -120,
   velocityDecay: 0.4,
-  autoRotate: false
+  autoRotate: false,
+  autoRotateSpeed: 1.0
 };
 
 const SETTINGS_KEY = 'memory_os_graph_settings';
@@ -664,6 +665,11 @@ function applySettingsToUI(s) {
   if (document.getElementById('auto-rotate-toggle')) {
     document.getElementById('auto-rotate-toggle').checked = s.autoRotate;
     isAutoRotate = s.autoRotate;
+  }
+  if (document.getElementById('auto-rotate-speed-slider')) {
+    document.getElementById('auto-rotate-speed-slider').value = s.autoRotateSpeed;
+    document.getElementById('auto-rotate-speed-val').innerText = s.autoRotateSpeed;
+    window.currentAutoRotateSpeed = Number(s.autoRotateSpeed);
   }
 }
 
@@ -783,10 +789,21 @@ if (document.getElementById('velocity-decay-slider')) {
 }
 
 let isAutoRotate = false;
+window.currentAutoRotateSpeed = 1.0;
+
 if (document.getElementById('auto-rotate-toggle')) {
   document.getElementById('auto-rotate-toggle').addEventListener('change', (e) => {
     isAutoRotate = e.target.checked;
     saveSetting('autoRotate', isAutoRotate);
+  });
+}
+
+if (document.getElementById('auto-rotate-speed-slider')) {
+  document.getElementById('auto-rotate-speed-slider').addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    document.getElementById('auto-rotate-speed-val').innerText = val;
+    window.currentAutoRotateSpeed = val;
+    saveSetting('autoRotateSpeed', val);
   });
 }
 
@@ -817,7 +834,8 @@ setInterval(() => {
     // If the camera is extremely close to the center axis, don't rotate to avoid NaN jumping
     if (dist > 0.1) {
       const currentAngle = Math.atan2(dx, dz);
-      const newAngle = currentAngle + Math.PI / 600;
+      const baseSpeed = Math.PI / 600;
+      const newAngle = currentAngle + (baseSpeed * window.currentAutoRotateSpeed);
       
       Graph.cameraPosition({
         x: target.x + dist * Math.sin(newAngle),
