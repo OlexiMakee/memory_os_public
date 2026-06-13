@@ -49,6 +49,14 @@ async function initApp() {
     return;
   }
 
+  window.getLinkWidth = function(link) {
+    const sId = typeof link.source === 'object' ? link.source.id : link.source;
+    const tId = typeof link.target === 'object' ? link.target.id : link.target;
+    
+    if (window.showLeafLinks) return 1.0;
+    return (nodeDegrees[sId] > 2 && nodeDegrees[tId] > 2) ? 1.0 : 0;
+  };
+
   // Calculate node connections (degrees)
   gData.nodes.forEach(n => { nodeDegrees[n.id] = 0; });
   gData.links.forEach(l => {
@@ -86,13 +94,7 @@ async function initApp() {
       const deg = nodeDegrees[node.id] || 0;
       return baseSize + Math.sqrt(deg) * 2;
     })
-    .linkWidth(link => {
-      const sId = typeof link.source === 'object' ? link.source.id : link.source;
-      const tId = typeof link.target === 'object' ? link.target.id : link.target;
-      
-      if (window.showLeafLinks) return 1.0;
-      return (nodeDegrees[sId] > 2 && nodeDegrees[tId] > 2) ? 1.0 : 0;
-    })
+    .linkWidth(link => getLinkWidth(link))
     .linkColor(link => {
       const sId = typeof link.source === 'object' ? link.source.id : link.source;
       const tId = typeof link.target === 'object' ? link.target.id : link.target;
@@ -691,7 +693,7 @@ function applySettingsToGraph(s) {
   try { if (typeof Graph.linkDirectionalParticleWidth === 'function') Graph.linkDirectionalParticleWidth(Number(s.particleWidth)); } catch(e){}
   
   // Re-trigger link width function to apply showLeafLinks
-  try { if (typeof Graph.linkWidth === 'function') Graph.linkWidth(Graph.linkWidth()); } catch(e){}
+  try { if (typeof Graph.linkWidth === 'function') Graph.linkWidth(link => window.getLinkWidth(link)); } catch(e){}
 
   try { 
     if (Graph.d3Force('link')) { 
@@ -822,7 +824,7 @@ if (document.getElementById('show-leaf-links-toggle')) {
   document.getElementById('show-leaf-links-toggle').addEventListener('change', (e) => {
     window.showLeafLinks = e.target.checked;
     saveSetting('showLeafLinks', window.showLeafLinks);
-    if (Graph && typeof Graph.linkWidth === 'function') Graph.linkWidth(Graph.linkWidth());
+    if (Graph && typeof Graph.linkWidth === 'function') Graph.linkWidth(link => window.getLinkWidth(link));
   });
 }
 
