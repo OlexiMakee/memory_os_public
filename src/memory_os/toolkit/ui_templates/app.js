@@ -689,13 +689,6 @@ function applySettingsToGraph(s) {
     } 
   } catch(e){}
   try { if (typeof Graph.d3VelocityDecay === 'function') Graph.d3VelocityDecay(Number(s.velocityDecay)); } catch(e){}
-  try {
-    if (Graph.controls) {
-      const controls = Graph.controls();
-      controls.autoRotate = s.autoRotate === true;
-      controls.autoRotateSpeed = 1.0;
-    }
-  } catch(e) {}
 }
 
 window.applyAllSettingsSafely = function() {
@@ -794,12 +787,6 @@ if (document.getElementById('auto-rotate-toggle')) {
   document.getElementById('auto-rotate-toggle').addEventListener('change', (e) => {
     isAutoRotate = e.target.checked;
     saveSetting('autoRotate', isAutoRotate);
-    if (Graph && Graph.controls) {
-      try {
-        Graph.controls().autoRotate = isAutoRotate;
-        Graph.controls().autoRotateSpeed = 1.0;
-      } catch(err) {}
-    }
   });
 }
 
@@ -810,4 +797,33 @@ if (document.getElementById('reset-settings-btn')) {
   });
 }
 
-// Auto-rotation is handled by OrbitControls via Graph.controls().autoRotate
+// Custom auto-rotation that respects user zoom (dynamic radius)
+setInterval(() => {
+  if (isAutoRotate && Graph) {
+    if (window.lastFocusTime && Date.now() - window.lastFocusTime < 1800) return;
+    
+    // Pause auto-rotate if user is actively dragging/panning
+    if (Graph.controls && Graph.controls().state !== undefined && Graph.controls().state !== -1) return;
+
+    const camPos = Graph.cameraPosition();
+    if (!camPos) return;
+
+    const target = window.focusedNode || { x: 0, y: 0, z: 0 };
+    
+    const dx = camPos.x - target.x;
+    const dz = camPos.z - target.z;
+    const dist = Math.hypot(dx, dz);
+    
+    // If the camera is extremely close to the center axis, don't rotate to avoid NaN jumping
+    if (dist > 0.1) {
+      const currentAngle = Math.atan2(dx, dz);
+      const newAngle = currentAngle + Math.PI / 600;
+      
+      Graph.cameraPosition({
+        x: target.x + dist * Math.sin(newAngle),
+        y: camPos.y, // preserve user's vertical angle/height
+        z: target.z + dist * Math.cos(newAngle)
+      }, target);
+    }
+  }
+}, 30);
