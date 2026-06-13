@@ -8,7 +8,7 @@
   <script src="https://unpkg.com/3d-force-graph"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
-    :root {
+:root {
       --bg-main: #0b0f19;
       --bg-panel: rgba(15, 23, 42, 0.75);
       --border-panel: rgba(255, 255, 255, 0.08);
@@ -386,6 +386,7 @@
       color: var(--text-muted);
       margin: 4px 0 8px 0;
     }
+
   </style>
 </head>
 <body>
@@ -786,7 +787,7 @@
               <a href="${linkUrl}" target="_blank" style="color:var(--text-header); text-decoration:none; flex-grow: 1; overflow: hidden;">
                 <span class="list-item-title"><i class="fa-solid ${icon}" style="margin-right:8px; color:var(--accent-blue);"></i>${displayTitle}</span>
               </a>
-              <button onclick="navigator.clipboard.writeText('${linkUrl}'); this.innerHTML='<i class='fa-solid fa-check' style='color:var(--accent-green)'></i>'; setTimeout(()=>this.innerHTML='<i class='fa-regular fa-copy'></i>', 1500);" style="background:none; border:none; color:var(--text-muted); cursor:pointer; padding:4px;" title="Copy to clipboard">
+              <button onclick="navigator.clipboard.writeText('${linkUrl}'); this.innerHTML='<i class=\'fa-solid fa-check\' style=\'color:var(--accent-green)\'></i>'; setTimeout(()=>this.innerHTML='<i class=\'fa-regular fa-copy\'></i>', 1500);" style="background:none; border:none; color:var(--text-muted); cursor:pointer; padding:4px;" title="Copy to clipboard">
                 <i class="fa-regular fa-copy"></i>
               </button>
             </div>

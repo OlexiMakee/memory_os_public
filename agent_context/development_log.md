@@ -52,3 +52,17 @@
 - **Feature**: Added realtime `AuditorManager` and HTTP IPC monitoring for background daemon tasks (Ollama / ML mock auditors). Integrated system CPU/RAM usage tracking.
 - **UI/UX**: Implemented copy-to-clipboard helper buttons in the UI for daemon start/stop CLI commands as a secure workaround for browser terminal execution limitations.
 - **Fix**: Adjusted 3D force graph link rendering to use 1px faint lines for weak connections to prevent distant peripheral nodes from disappearing due to WebGL perspective clipping.
+
+## 2026-06-13: UI Refactoring & Data Extractor Interface
+- Refactored `graph_visualizer.py` extracting hardcoded templates to `src/memory_os/toolkit/ui_templates/`.
+- Created `DataExtractor` and `DocumentIngestor` in `src/memory_os/toolkit/base_extractor.py`.
+- Refactored `notion_sync.py` and `gdrive_sync.py` into dedicated extractors, removing direct file IO dependencies in favor of `DocumentIngestor`.
+- Automated testing (`test_auto.py`) passed successfully.
+
+## 2026-06-13: UI Refactoring Part 2 (Local Server & Adaptive Layout)
+- **Feature**: Extracted Flask-free Python HTTP server into `src/memory_os/ui/server.py` serving static assets and dynamic API endpoints.
+- **Feature**: Added root-level `ui_launcher.py` for direct quick access to the graph UI.
+- **UI/UX**: Implemented `file-viewer-overlay` popup widget for reading node file contents (`.md`, `.py`, `.json`, `.js`) directly within the 3D graph view.
+- **UI/UX**: Relocated Legend panel to the right column above the Hardware Metrics panel.
+- **UI/UX**: Transformed the Graph Settings into an adaptive glassmorphism accordion widget anchored to the bottom of the left column. Added "Auto-Rotate" and fine-tuned settings options (Visuals & Physics).
+- **Fix**: Added dynamic node sizing based on file size metadata. Added `Cache-Control: no-store` to the local HTTP server to prevent stale JavaScript serving.

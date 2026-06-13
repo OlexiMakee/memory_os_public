@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Memory OS - Premium 3D Graph Visualization</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/3d-force-graph"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="3d-graph"></div>
+  
+  <!-- LEFT COLUMN -->
+  <div style="position: absolute; top: 20px; left: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 12px; pointer-events: none; z-index: 10;">
+    <!-- LEFT SIDEBAR -->
+    <div id="left-panel" class="glass-panel">
+    <div>
+      <h1>Memory OS</h1>
+      <p class="subtitle">Interactive Knowledge Graph Visualizer</p>
+    </div>
+    
+    <div class="search-container">
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <input type="text" id="search-input" class="search-input" placeholder="Search nodes, tags or text...">
+    </div>
+    
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div id="node-count" class="metric-value">0</div>
+        <div class="metric-label">Nodes</div>
+      </div>
+      <div class="metric-card">
+        <div id="edge-count" class="metric-value">0</div>
+        <div class="metric-label">Links</div>
+      </div>
+      <div class="metric-card">
+        <div id="unlinked-count" class="metric-value">0</div>
+        <div class="metric-label">Isolated</div>
+      </div>
+    </div>
+    
+    <div>
+      <h2><i class="fa-solid fa-chart-pie"></i> Type Breakdown</h2>
+      <div id="type-breakdown-list" class="list-container" style="margin-top: 10px;">
+        <!-- Filled dynamically -->
+      </div>
+    </div>
+    
+    <div style="display: flex; flex-direction: column; flex-grow: 1; min-height: 0; padding-bottom: 20px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <h2 id="top-connected-title" style="cursor: pointer; margin: 0;" onclick="cycleConnectionFilter()"><i class="fa-solid fa-arrow-trend-up"></i> Top Connected</h2>
+        <div style="display: flex; gap: 6px; align-items: center;">
+          <input type="text" id="list-limit-input" value="20" style="width: 40px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: var(--text-main); border-radius: 4px; padding: 2px 4px; font-size: 11px; text-align: center;">
+          <button onclick="document.getElementById('list-limit-input').value = 'all'; updateStatsAndPanel();" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1); color: var(--text-main); border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer; transition: background 0.2s;">All</button>
+        </div>
+      </div>
+      <div id="top-connected-list" class="list-container" style="overflow-y: auto; max-height: 35vh; padding-right: 4px;">
+        <!-- Filled dynamically -->
+      </div>
+    </div>
+    </div>
+    
+    <!-- SETTINGS PANEL (Accordion) -->
+    <div id="settings-panel" class="glass-panel" style="position: relative; width: 340px; flex-shrink: 0; pointer-events: auto; padding: 0; display: flex; flex-direction: column; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); overflow: hidden; margin-top: auto;">
+      <!-- Header -->
+      <div style="padding: 16px 24px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;" onclick="toggleSettingsAccordion()">
+        <h2 style="font-size: 14px; margin: 0; color: var(--text-header);"><i class="fa-solid fa-sliders"></i> Graph Settings</h2>
+        <i class="fa-solid fa-chevron-up" id="settings-accordion-chevron" style="transition: transform 0.3s ease; color: var(--text-muted);"></i>
+      </div>
+      
+      <!-- Body -->
+      <div id="settings-accordion-body" style="padding: 0 24px 24px 24px; display: none;">
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
+              <span>Color Scheme</span>
+            </div>
+            <select id="color-mode-select" class="dropdown" style="width: 100%; box-sizing: border-box;">
+              <option value="degree" selected>Connection Density</option>
+              <option value="type">Node Type</option>
+              <option value="status">Status</option>
+              <option value="trust">Trust Level</option>
+            </select>
+          </div>
+          
+          <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
+            <h3 style="font-size: 11px; margin-top: 0; margin-bottom: 8px; color: var(--text-muted);"><i class="fa-solid fa-eye"></i> Visuals</h3>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
+              <span>Node Resolution</span>
+              <span id="node-res-val">8</span>
+            </div>
+            <input type="range" id="node-res-slider" min="4" max="32" step="2" value="8" style="width: 100%; margin-bottom: 10px;">
+            
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
+              <span>Particle Speed</span>
+              <span id="particle-speed-val">0.005</span>
+            </div>
+            <input type="range" id="particle-speed-slider" min="0" max="0.02" step="0.001" value="0.005" style="width: 100%;">
+          </div>
+          
+          <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
+            <h3 style="font-size: 11px; margin-top: 0; margin-bottom: 8px; color: var(--text-muted);"><i class="fa-solid fa-atom"></i> Physics</h3>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
+              <span>Link Distance</span>
+              <span id="link-dist-val">40</span>
+            </div>
+            <input type="range" id="link-dist-slider" min="10" max="150" step="5" value="40" style="width: 100%; margin-bottom: 10px;">
+            
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px; color: var(--text-main);">
+              <span>Charge Force</span>
+              <span id="charge-force-val">-120</span>
+            </div>
+            <input type="range" id="charge-force-slider" min="-300" max="0" step="10" value="-120" style="width: 100%;">
+          </div>
+
+          <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px; display: flex; align-items: center; justify-content: space-between;">
+            <span style="font-size: 11px; color: var(--text-main);"><i class="fa-solid fa-rotate-right"></i> Auto-Rotate</span>
+            <label class="switch" style="position: relative; display: inline-block; width: 34px; height: 20px;">
+              <input type="checkbox" id="auto-rotate-toggle" style="opacity: 0; width: 0; height: 0;">
+              <span class="slider" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(255,255,255,0.2); transition: .4s; border-radius: 20px;">
+                <span class="slider-dot" style="position: absolute; content: ''; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%;"></span>
+              </span>
+            </label>
+            <style>
+              #auto-rotate-toggle:checked + .slider { background-color: var(--accent-blue); }
+              #auto-rotate-toggle:checked + .slider .slider-dot { transform: translateX(14px); }
+            </style>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- RIGHT COLUMN -->
+  <div style="position: absolute; top: 20px; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 12px; pointer-events: none; z-index: 10; align-items: flex-end;">
+    <!-- RIGHT SIDEBAR (DETAILS DRAWER) -->
+    <div id="right-panel" class="glass-panel">
+      <button class="close-btn" onclick="closeDrawer()"><i class="fa-solid fa-xmark"></i></button>
+      
+      <div>
+        <div id="node-type-badge" class="badge">Fact</div>
+        <h2 id="node-detail-id" style="font-size: 20px; margin-top: 10px; word-break: break-all;">node.id</h2>
+      </div>
+      
+      <!-- Meta badges -->
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <div id="node-status-badge" class="badge" style="background: rgba(255, 255, 255, 0.05);">Status</div>
+        <div id="node-trust-badge" class="badge" style="background: rgba(255, 255, 255, 0.05);">Trust</div>
+        <div id="node-freshness-badge" class="badge" style="background: rgba(255, 255, 255, 0.05); text-transform: none;"><i class="fa-solid fa-calendar"></i> Date</div>
+      </div>
+      
+      <div>
+        <h2><i class="fa-solid fa-tags"></i> Tags</h2>
+        <div id="node-tags-list" style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;">
+          <!-- Filled dynamically -->
+        </div>
+      </div>
+      
+      <div>
+        <h2><i class="fa-solid fa-file-lines"></i> Content Summary</h2>
+        <div id="node-content-render" class="node-content-body" style="margin-top: 8px;">
+          <!-- Markdown rendered here -->
+        </div>
+      </div>
+      
+      <div>
+        <h2><i class="fa-solid fa-link"></i> Evidence Links</h2>
+        <div id="node-evidence-list" class="list-container" style="margin-top: 8px;">
+          <!-- Filled dynamically -->
+        </div>
+      </div>
+      
+      <div>
+        <h2><i class="fa-solid fa-share-nodes"></i> Connections</h2>
+        <div id="node-connections-list" style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px;">
+          <!-- Filled dynamically -->
+        </div>
+      </div>
+    </div>
+    <!-- LEGEND PANEL -->
+    <div id="legend-panel" class="glass-panel" style="position: relative; width: 100%; box-sizing: border-box; padding: 20px; font-size: 11px; pointer-events: auto; flex: 0 0 auto;">
+      <h2 style="font-size: 12px; margin: 0; cursor: pointer; display: flex; align-items: center; justify-content: space-between; width: 100%;" onclick="const items = document.getElementById('legend-items'); const icon = document.getElementById('legend-chevron'); if (items.style.display === 'none') { items.style.display = 'block'; icon.className = 'fa-solid fa-chevron-up'; } else { items.style.display = 'none'; icon.className = 'fa-solid fa-chevron-down'; }">
+        <span><i class="fa-solid fa-circle-info"></i> Legend</span>
+        <i class="fa-solid fa-chevron-up" id="legend-chevron"></i>
+      </h2>
+      <div id="legend-items" style="margin-top: 10px;">
+        <!-- Filled dynamically -->
+      </div>
+    </div>
+
+    <!-- AUDITORS PANEL -->
+    <div id="auditors-panel" class="glass-panel" style="position: relative; width: 100%; box-sizing: border-box; padding: 20px; font-size: 11px; display: flex; flex-direction: column; gap: 8px; pointer-events: auto; flex: 0 0 auto; max-height: 50vh; overflow-y: auto; margin-top: auto;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-panel); padding-bottom: 4px;">
+        <h2 style="margin: 0; font-size: 12px;"><i class="fa-solid fa-microchip"></i> Hardware Metrics</h2>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <i class="fa-solid fa-copy" style="color: var(--text-muted); cursor: pointer;" title="Copy Stop Command" onclick="navigator.clipboard.writeText('PYTHONPATH=src python3 -m memory_os daemon stop'); alert('Stop command copied to clipboard!');"></i>
+          <span id="daemon-status-badge" style="color: var(--text-muted); font-size: 10px;">Offline</span>
+        </div>
+      </div>
+      <div style="display: flex; gap: 10px;">
+        <div style="flex: 1;">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 2px;"><span>CPU</span><span id="cpu-val">0%</span></div>
+          <div style="height: 4px; background: rgba(0,0,0,0.5); border-radius: 2px; overflow: hidden;"><div id="cpu-bar" style="height: 100%; width: 0%; background: var(--accent-blue); transition: width 0.3s;"></div></div>
+        </div>
+        <div style="flex: 1;">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 2px;"><span>RAM</span><span id="ram-val">0%</span></div>
+          <div style="height: 4px; background: rgba(0,0,0,0.5); border-radius: 2px; overflow: hidden;"><div id="ram-bar" style="height: 100%; width: 0%; background: var(--accent-green); transition: width 0.3s;"></div></div>
+        </div>
+      </div>
+      <div style="border-bottom: 1px solid var(--border-panel); padding-bottom: 4px; margin-top: 4px;">
+        <h2 style="margin: 0; font-size: 12px;"><i class="fa-solid fa-robot"></i> Background Auditors</h2>
+      </div>
+      <div id="auditors-list" style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="color: var(--text-muted); text-align: center; padding: 10px;">Daemon is not running.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CENTER: EVIDENCE VIEWER WIDGET (Hidden by default) -->
+  <div id="file-viewer-overlay" class="file-viewer-overlay" style="display: none;" onclick="closeFileViewer()">
+    <div id="file-viewer-widget" class="glass-panel file-viewer-widget" onclick="event.stopPropagation()">
+      <div class="file-viewer-header">
+        <h2 id="file-viewer-title" style="margin: 0; font-size: 14px; word-break: break-all;">File Viewer</h2>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <button id="file-viewer-copy-btn" class="icon-btn" title="Copy Path" onclick="copyViewerPath()"><i class="fa-solid fa-copy"></i></button>
+          <button class="icon-btn close-btn-static" onclick="closeFileViewer()"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+      <div id="file-viewer-content" class="file-viewer-content">
+        <!-- Content dynamically injected here -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Load our main application logic -->
+  <script src="app.js"></script>
+</body>
+</html>

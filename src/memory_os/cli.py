@@ -1164,14 +1164,10 @@ def cmd_gdrive_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     )
     return 0 if success else 1
 
-def cmd_export_3d(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.graph_visualizer import generate_3d_graph_visualization
-    success = generate_3d_graph_visualization(config)
-    if success:
-        print("\n[✓] 3D Graph successfully exported to memory_graph_3d.html!")
-        print("Double-click the file to open it in your web browser.\n")
-        return 0
-    return 1
+def cmd_ui(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.ui import run_ui_server
+    run_ui_server(config, port=args.port)
+    return 0
 
 
 
@@ -1556,8 +1552,9 @@ def build_parser() -> argparse.ArgumentParser:
     gdrive_parser.add_argument("--to-capsules", action="store_true", help="Import Google Drive documents as task capsules instead of memory nodes.")
     gdrive_parser.set_defaults(func=cmd_gdrive_sync)
 
-    export_3d_parser = subparsers.add_parser("export-3d", help="Export memory graph as an interactive 3D HTML page.")
-    export_3d_parser.set_defaults(func=cmd_export_3d)
+    ui_parser = subparsers.add_parser("ui", help="Start the Memory OS Visualizer UI server.")
+    ui_parser.add_argument("--port", type=int, default=8080, help="Port to run the UI server on.")
+    ui_parser.set_defaults(func=cmd_ui)
 
 
 
