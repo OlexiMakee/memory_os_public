@@ -157,9 +157,13 @@ function getNodeColor(node) {
 }
 
 function focusOnNode(node) {
+  window.focusedNode = node;
+  window.lastFocusTime = Date.now();
   const distance = 80;
   const distRatio = 1 + distance/Math.hypot(node.x, node.y, node.z);
 
+  // If auto-rotate is enabled, we don't need the transition to block,
+  // but it's fine. The interval loop will override it smoothly.
   Graph.cameraPosition(
     { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
     node,
@@ -287,6 +291,7 @@ function showNodeDetails(node) {
 }
 
 function closeDrawer() {
+  window.focusedNode = null;
   document.getElementById('right-panel').classList.remove('active');
 }
 
@@ -795,15 +800,30 @@ if (document.getElementById('reset-settings-btn')) {
 let autoRotateAngle = 0;
 setInterval(() => {
   if (isAutoRotate && Graph) {
-    const camPos = Graph.cameraPosition();
-    // Only rotate if we have a valid position
-    if (camPos && (camPos.x !== 0 || camPos.z !== 0)) {
-      const dist = Math.hypot(camPos.x, camPos.z);
+    if (window.lastFocusTime && Date.now() - window.lastFocusTime < 1800) {
+      return; // Wait for camera transition to finish
+    }
+
+    if (window.focusedNode) {
+      // Orbit around the focused node
       autoRotateAngle += Math.PI / 600; // Slow rotation
+      const radius = 80;
       Graph.cameraPosition({
-        x: dist * Math.sin(autoRotateAngle),
-        z: dist * Math.cos(autoRotateAngle)
-      });
+        x: window.focusedNode.x + radius * Math.sin(autoRotateAngle),
+        y: window.focusedNode.y + 20, // slightly elevated
+        z: window.focusedNode.z + radius * Math.cos(autoRotateAngle)
+      }, window.focusedNode); // look at the focused node
+    } else {
+      // Orbit around the center
+      const camPos = Graph.cameraPosition();
+      if (camPos && (camPos.x !== 0 || camPos.z !== 0)) {
+        const dist = Math.hypot(camPos.x, camPos.z);
+        autoRotateAngle += Math.PI / 600; 
+        Graph.cameraPosition({
+          x: dist * Math.sin(autoRotateAngle),
+          z: dist * Math.cos(autoRotateAngle)
+        });
+      }
     }
   }
 }, 30);
