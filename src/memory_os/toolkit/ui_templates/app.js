@@ -159,13 +159,10 @@ function getNodeColor(node) {
 function focusOnNode(node) {
   window.focusedNode = node;
   window.lastFocusTime = Date.now();
-  const distance = 80;
-  const distRatio = 1 + distance/Math.hypot(node.x, node.y, node.z);
 
-  // If auto-rotate is enabled, we don't need the transition to block,
-  // but it's fine. The interval loop will override it smoothly.
+  // Keep current position, only change lookAt target
   Graph.cameraPosition(
-    { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+    Graph.cameraPosition(),
     node,
     1800
   );
@@ -293,6 +290,9 @@ function showNodeDetails(node) {
 function closeDrawer() {
   window.focusedNode = null;
   document.getElementById('right-panel').classList.remove('active');
+  if (Graph) {
+    Graph.cameraPosition(Graph.cameraPosition(), {x: 0, y: 0, z: 0}, 1800);
+  }
 }
 
 // File Viewer Logic
@@ -689,6 +689,13 @@ function applySettingsToGraph(s) {
     } 
   } catch(e){}
   try { if (typeof Graph.d3VelocityDecay === 'function') Graph.d3VelocityDecay(Number(s.velocityDecay)); } catch(e){}
+  try {
+    if (Graph.controls) {
+      const controls = Graph.controls();
+      controls.autoRotate = s.autoRotate === true;
+      controls.autoRotateSpeed = 1.0;
+    }
+  } catch(e) {}
 }
 
 window.applyAllSettingsSafely = function() {
@@ -787,6 +794,12 @@ if (document.getElementById('auto-rotate-toggle')) {
   document.getElementById('auto-rotate-toggle').addEventListener('change', (e) => {
     isAutoRotate = e.target.checked;
     saveSetting('autoRotate', isAutoRotate);
+    if (Graph && Graph.controls) {
+      try {
+        Graph.controls().autoRotate = isAutoRotate;
+        Graph.controls().autoRotateSpeed = 1.0;
+      } catch(err) {}
+    }
   });
 }
 
@@ -797,33 +810,4 @@ if (document.getElementById('reset-settings-btn')) {
   });
 }
 
-let autoRotateAngle = 0;
-setInterval(() => {
-  if (isAutoRotate && Graph) {
-    if (window.lastFocusTime && Date.now() - window.lastFocusTime < 1800) {
-      return; // Wait for camera transition to finish
-    }
-
-    if (window.focusedNode) {
-      // Orbit around the focused node
-      autoRotateAngle += Math.PI / 600; // Slow rotation
-      const radius = 80;
-      Graph.cameraPosition({
-        x: window.focusedNode.x + radius * Math.sin(autoRotateAngle),
-        y: window.focusedNode.y + 20, // slightly elevated
-        z: window.focusedNode.z + radius * Math.cos(autoRotateAngle)
-      }, window.focusedNode); // look at the focused node
-    } else {
-      // Orbit around the center
-      const camPos = Graph.cameraPosition();
-      if (camPos && (camPos.x !== 0 || camPos.z !== 0)) {
-        const dist = Math.hypot(camPos.x, camPos.z);
-        autoRotateAngle += Math.PI / 600; 
-        Graph.cameraPosition({
-          x: dist * Math.sin(autoRotateAngle),
-          z: dist * Math.cos(autoRotateAngle)
-        });
-      }
-    }
-  }
-}, 30);
+// Auto-rotation is handled by OrbitControls via Graph.controls().autoRotate
