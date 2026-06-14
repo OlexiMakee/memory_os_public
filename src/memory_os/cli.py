@@ -181,12 +181,19 @@ def cmd_check_updates(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     
     module_path = Path(memory_os.__file__).parent
     has_changes = False
+    current_branch = "unknown"
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain", str(module_path)],
             capture_output=True, text=True, check=True
         )
         has_changes = bool(result.stdout.strip())
+        
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(module_path), capture_output=True, text=True, check=True
+        )
+        current_branch = branch_result.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
@@ -200,6 +207,10 @@ def cmd_check_updates(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         print("to the public repository via a Pull Request or Agent Proposal!")
 
     print("\n[AGENT INSTRUCTION]")
+    if current_branch != "main":
+        print("DOWNSTREAM RESTRICTION: You operate STRICTLY on the `public` branch.")
+        print("You are FORBIDDEN from accessing, fetching, or interacting with the `main` branch of memory_os.")
+        
     print("You are authorized to ONLY PROPOSE features and bug-fixes for memory_os.")
     print("DO NOT implement them directly in the downstream code.")
     print("Propose changes by suggesting a GitHub issue/PR to the user, or by writing a proposal file to agent_proposals/.")
