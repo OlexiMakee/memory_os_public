@@ -77,6 +77,25 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
         if path == '/' or path == '/index.html':
             target_file = templates_dir / "index.html"
             mime_type = "text/html"
+            if not target_file.exists():
+                self.send_error(404, f"Template {target_file.name} not found")
+                return
+            
+            self.send_response(200)
+            self.send_header("Content-Type", mime_type)
+            self._send_cors_headers()
+            self.end_headers()
+            
+            with open(target_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            root_path = str(self.server.provider.config.root_dir)
+            script_injection = f'<script>window.WORKSPACE_ROOT = {json.dumps(root_path)};</script>\n</head>'
+            content = content.replace('</head>', script_injection)
+            
+            self.wfile.write(content.encode('utf-8'))
+            return
+
         elif path == '/styles.css':
             target_file = templates_dir / "styles.css"
             mime_type = "text/css"

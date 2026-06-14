@@ -179,6 +179,15 @@ function focusOnNode(node) {
   showNodeDetails(node);
 }
 
+function getAbsolutePath(path) {
+  if (path.startsWith('file:')) path = path.substring(5);
+  if (path.startsWith('/')) return path;
+  if (window.WORKSPACE_ROOT) {
+    return window.WORKSPACE_ROOT + (window.WORKSPACE_ROOT.endsWith('/') ? '' : '/') + path;
+  }
+  return path;
+}
+
 function showNodeDetails(node) {
   document.getElementById('node-detail-id').innerText = node.id;
   
@@ -225,6 +234,21 @@ function showNodeDetails(node) {
   const contentRender = document.getElementById('node-content-render');
   contentRender.innerHTML = marked.parse(node.summary || '*No summary content*');
 
+  const contentActions = document.getElementById('node-content-actions');
+  contentActions.innerHTML = '';
+  
+  // If the node itself is a file, add actions to the content summary header
+  let isNodeLocalFile = !node.id.startsWith('http') && !node.id.startsWith('https');
+  if (isNodeLocalFile) {
+    const absPath = getAbsolutePath(node.id);
+    contentActions.innerHTML = `
+      <button onclick="openFileViewer('${node.id}')" style="background:rgba(59, 130, 246, 0.1); border:1px solid rgba(59, 130, 246, 0.3); color:#3b82f6; border-radius:4px; padding:2px 8px; font-size:10px; cursor:pointer;">View File</button>
+      <button onclick="navigator.clipboard.writeText('${absPath}'); this.innerHTML='<i class=\\'fa-solid fa-check\\' style=\\'color:var(--accent-green)\\'></i>'; setTimeout(()=>this.innerHTML='<i class=\\'fa-regular fa-copy\\'></i>', 1500);" style="background:none; border:none; color:var(--text-muted); cursor:pointer; padding:4px;" title="Copy Absolute Path">
+        <i class="fa-regular fa-copy"></i>
+      </button>
+    `;
+  }
+
   const evidenceList = document.getElementById('node-evidence-list');
   evidenceList.innerHTML = '';
   if (node.evidence && node.evidence.length > 0) {
@@ -248,6 +272,7 @@ function showNodeDetails(node) {
       let actionHtml = isLocalFile ? 
         `<button onclick="openFileViewer('${linkUrl}')" style="background:rgba(59, 130, 246, 0.1); border:1px solid rgba(59, 130, 246, 0.3); color:#3b82f6; border-radius:4px; padding:2px 8px; font-size:10px; cursor:pointer; margin-right:4px;">View File</button>` 
         : '';
+      let pathToCopy = isLocalFile ? getAbsolutePath(linkUrl) : linkUrl;
 
       div.innerHTML = `
         <div style="display:flex; justify-content:space-between; width:100%; align-items:center;">
@@ -256,7 +281,7 @@ function showNodeDetails(node) {
           </a>
           <div style="display:flex; align-items:center;">
             ${actionHtml}
-            <button onclick="navigator.clipboard.writeText('${linkUrl}'); this.innerHTML='<i class=\\'fa-solid fa-check\\' style=\\'color:var(--accent-green)\\'></i>'; setTimeout(()=>this.innerHTML='<i class=\\'fa-regular fa-copy\\'></i>', 1500);" style="background:none; border:none; color:var(--text-muted); cursor:pointer; padding:4px;" title="Copy to clipboard">
+            <button onclick="navigator.clipboard.writeText('${pathToCopy}'); this.innerHTML='<i class=\\'fa-solid fa-check\\' style=\\'color:var(--accent-green)\\'></i>'; setTimeout(()=>this.innerHTML='<i class=\\'fa-regular fa-copy\\'></i>', 1500);" style="background:none; border:none; color:var(--text-muted); cursor:pointer; padding:4px;" title="Copy Absolute Path">
               <i class="fa-regular fa-copy"></i>
             </button>
           </div>
