@@ -298,6 +298,7 @@ function showNodeDetails(node) {
 
 function closeDrawer() {
   window.focusedNode = null;
+  window.lastFocusTime = Date.now();
   document.getElementById('right-panel').classList.remove('active');
   if (Graph) {
     Graph.cameraPosition(Graph.cameraPosition(), {x: 0, y: 0, z: 0}, 1800);
@@ -841,9 +842,19 @@ if (document.getElementById('reset-settings-btn')) {
 }
 
 // Custom auto-rotation that respects user zoom (dynamic radius)
+window.lastUserInteraction = 0;
+
+const graphElem = document.getElementById('3d-graph');
+if (graphElem) {
+  graphElem.addEventListener('wheel', () => window.lastUserInteraction = Date.now(), {passive: true});
+  graphElem.addEventListener('mousedown', () => window.lastUserInteraction = Date.now(), {passive: true});
+  graphElem.addEventListener('touchstart', () => window.lastUserInteraction = Date.now(), {passive: true});
+}
+
 setInterval(() => {
   if (isAutoRotate && Graph) {
-    if (window.lastFocusTime && Date.now() - window.lastFocusTime < 1800) return;
+    if (window.lastFocusTime && Date.now() - window.lastFocusTime < 1850) return;
+    if (window.lastUserInteraction && Date.now() - window.lastUserInteraction < 600) return;
     
     // Pause auto-rotate if user is actively dragging/panning
     if (Graph.controls && Graph.controls().state !== undefined && Graph.controls().state !== -1) return;
