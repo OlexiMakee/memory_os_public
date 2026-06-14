@@ -238,7 +238,7 @@ function showNodeDetails(node) {
   contentActions.innerHTML = '';
   
   // If the node itself is a file, add actions to the content summary header
-  let isNodeLocalFile = !node.id.startsWith('http') && !node.id.startsWith('https');
+  let isNodeLocalFile = node.type === 'file' || node.id.startsWith('file:') || (node.id.includes('.') && !node.id.includes(':'));
   if (isNodeLocalFile) {
     const absPath = getAbsolutePath(node.id);
     contentActions.innerHTML = `
