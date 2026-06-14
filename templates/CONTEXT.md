@@ -31,3 +31,7 @@ Never print `.env` values. Required vars:
 ## Known Risks & Guidelines
 - [Key constraint or gotcha agents must know]
 - [Another constraint]
+
+## Upstream Updates
+- **Check for updates**: Run `python3 -m memory_os check-updates`.
+- **Proposing Fixes**: Do NOT modify the core Memory OS engine code directly in this downstream project. If you find a bug or need a feature in Memory OS, ONLY propose it (e.g. by writing to `agent_proposals/` or instructing the user to open a PR on the upstream repository).

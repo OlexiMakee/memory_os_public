@@ -97,6 +97,8 @@ After `memory_os init`, add this to your `AGENTS.md` or `CLAUDE.md`:
 Run `memory_os search "<topic>"` before starting any task.
 After completing a task, append a capsule to `agent_context/task_capsules.jsonl`.
 Run `memory_os sync` after any memory update.
+Run `memory_os check-updates` periodically to find the upstream repository URL.
+If you need to fix bugs or add features to Memory OS, DO NOT modify the local package. Instead, propose the changes for the upstream repository.
 ```
 
 ## Templates

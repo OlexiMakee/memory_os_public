@@ -176,6 +176,35 @@ def cmd_audit(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         print(to_markdown(report))
     return 1 if report["capsule_jsonl_errors"] or report["capsule_validation_errors"] else 0
 
+def cmd_check_updates(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    import memory_os
+    
+    module_path = Path(memory_os.__file__).parent
+    has_changes = False
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", str(module_path)],
+            capture_output=True, text=True, check=True
+        )
+        has_changes = bool(result.stdout.strip())
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    print("Memory OS Upstream Configuration:")
+    print("  URL: https://github.com/OlexiMakee/memory_os/tree/public")
+    
+    if has_changes:
+        print("\n[!] LOCAL MODIFICATIONS DETECTED [!]")
+        print("You have made changes to the local memory_os core.")
+        print("Before updating, please consider proposing your features or bug-fixes")
+        print("to the public repository via a Pull Request or Agent Proposal!")
+
+    print("\n[AGENT INSTRUCTION]")
+    print("You are authorized to ONLY PROPOSE features and bug-fixes for memory_os.")
+    print("DO NOT implement them directly in the downstream code.")
+    print("Propose changes by suggesting a GitHub issue/PR to the user, or by writing a proposal file to agent_proposals/.")
+    return 0
+
 def cmd_validate(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     root = Path(args.root).resolve()
     
@@ -1563,6 +1592,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser = subparsers.add_parser("doctor", help="Check system dependencies, files, DB, and environment.")
     doctor_parser.set_defaults(func=cmd_doctor)
 
+    check_updates_parser = subparsers.add_parser(
+        "check-updates",
+        help="Check the upstream URL for memory_os and read agent contribution rules."
+    )
+    check_updates_parser.set_defaults(func=cmd_check_updates)
 
     return parser
 
