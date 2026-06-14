@@ -237,8 +237,8 @@ function showNodeDetails(node) {
   const contentActions = document.getElementById('node-content-actions');
   contentActions.innerHTML = '';
   
-  // If the node itself is a file, add actions to the content summary header
-  let isNodeLocalFile = node.type === 'file' || node.id.startsWith('file:') || (node.id.includes('.') && !node.id.includes(':'));
+  // Show file actions only for actual file-type nodes
+  let isNodeLocalFile = node.type === 'file' || node.id.startsWith('file:');
   if (isNodeLocalFile) {
     const absPath = getAbsolutePath(node.id);
     contentActions.innerHTML = `
@@ -421,11 +421,8 @@ function updateStatsAndPanel() {
     const item = document.createElement('div');
     item.className = 'list-item';
     item.onclick = () => {
-      document.getElementById('search-input').value = t;
-      searchQuery = t;
-      updateStatsAndPanel();
-      Graph.nodeColor(getNodeColor);
-      Graph.linkColor(link => window.getLinkColor(link));
+      searchInput.value = t;
+      applySearch(t);
     };
     item.innerHTML = `<span class="legend-item"><span class="color-dot" style="background:${dotColor};"></span> ${t}</span><span class="list-item-value">${typeCounts[t]}</span>`;
     typeBreakdownList.appendChild(item);
@@ -494,13 +491,25 @@ function updateLegend() {
   }
 }
 
-document.getElementById('search-input').addEventListener('input', (e) => {
-  searchQuery = e.target.value.toLowerCase().trim();
+const searchInput = document.getElementById('search-input');
+const searchClearBtn = document.getElementById('search-clear-btn');
+
+function applySearch(value) {
+  searchQuery = value.toLowerCase().trim();
+  searchClearBtn.style.display = searchQuery ? 'block' : 'none';
   updateStatsAndPanel();
   if (Graph) {
     Graph.nodeColor(getNodeColor);
     Graph.linkColor(link => window.getLinkColor(link));
   }
+}
+
+searchInput.addEventListener('input', (e) => applySearch(e.target.value));
+
+searchClearBtn.addEventListener('click', () => {
+  searchInput.value = '';
+  searchInput.focus();
+  applySearch('');
 });
 
 document.getElementById('list-limit-input').addEventListener('input', () => updateStatsAndPanel());

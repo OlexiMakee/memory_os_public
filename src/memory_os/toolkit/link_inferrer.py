@@ -286,6 +286,7 @@ class LinkInferrer:
             return 1
 
         existing_pairs = self._load_existing_pairs()
+        committed_pairs = set(existing_pairs)  # snapshot for final dedup filter
         print(f"Loaded {len(nodes)} nodes, {len(existing_pairs)} existing edges.")
 
         all_candidates: List[MemoryEdge] = []
@@ -304,7 +305,7 @@ class LinkInferrer:
                 all_candidates.extend(text_edges)
                 for e in text_edges:
                     existing_pairs.add((e.source, e.target))
-                    existing_pairs.add((e.target, e.source)) # Also prevent reverse duplicates just in case
+                    existing_pairs.add((e.target, e.source))
                 pass_num += 1
 
         # ── LLM method ───────────────────────────────────────────────────
@@ -340,7 +341,7 @@ class LinkInferrer:
             if key not in seen or e.confidence > seen[key].confidence:
                 seen[key] = e
 
-        new_edges = [e for e in seen.values() if (e.source, e.target) not in existing_pairs]
+        new_edges = [e for e in seen.values() if (e.source, e.target) not in committed_pairs]
         print(f"\nNew unique edges proposed: {len(new_edges)}")
 
         if not new_edges:
@@ -355,6 +356,6 @@ class LinkInferrer:
             return 0
 
         # ── Write ────────────────────────────────────────────────────────
-        written = self._write_edges(new_edges, existing_pairs)
+        written = self._write_edges(new_edges, committed_pairs)
         print(f"Written {written} new edges to {self.edges_path}")
         return 0

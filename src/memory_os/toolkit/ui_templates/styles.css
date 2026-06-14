@@ -168,7 +168,7 @@
       background: rgba(0, 0, 0, 0.3);
       border: 1px solid var(--border-panel);
       border-radius: 8px;
-      padding: 10px 12px 10px 36px;
+      padding: 10px 32px 10px 36px;
       color: var(--text-header);
       font-size: 13px;
       outline: none;
@@ -177,6 +177,25 @@
     
     .search-input:focus {
       border-color: var(--accent-blue);
+    }
+
+    .search-clear-btn {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 2px 4px;
+      font-size: 13px;
+      line-height: 1;
+      border-radius: 4px;
+      transition: color 0.15s;
+    }
+    .search-clear-btn:hover {
+      color: var(--text-header);
     }
     
     /* Metrics grid */
