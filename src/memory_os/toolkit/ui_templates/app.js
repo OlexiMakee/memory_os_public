@@ -237,12 +237,23 @@ function showNodeDetails(node) {
   const contentActions = document.getElementById('node-content-actions');
   contentActions.innerHTML = '';
   
-  // If the node itself is a file, add actions to the content summary header
+  // Determine the primary local file associated with this node
+  let primaryFilePath = null;
   let isNodeLocalFile = node.type === 'file' || node.id.startsWith('file:') || (node.id.includes('.') && !node.id.includes(':'));
+  
   if (isNodeLocalFile) {
-    const absPath = getAbsolutePath(node.id);
+    primaryFilePath = node.id;
+  } else if (node.evidence && node.evidence.length > 0) {
+    const firstEv = node.evidence[0];
+    if (!firstEv.startsWith('http') && !firstEv.startsWith('https')) {
+      primaryFilePath = firstEv;
+    }
+  }
+
+  if (primaryFilePath) {
+    const absPath = getAbsolutePath(primaryFilePath);
     contentActions.innerHTML = `
-      <button onclick="openFileViewer('${node.id}')" style="background:rgba(59, 130, 246, 0.1); border:1px solid rgba(59, 130, 246, 0.3); color:#3b82f6; border-radius:4px; padding:2px 8px; font-size:10px; cursor:pointer;">View File</button>
+      <button onclick="openFileViewer('${primaryFilePath}')" style="background:rgba(59, 130, 246, 0.1); border:1px solid rgba(59, 130, 246, 0.3); color:#3b82f6; border-radius:4px; padding:2px 8px; font-size:10px; cursor:pointer;">View File</button>
       <button onclick="navigator.clipboard.writeText('${absPath}'); this.innerHTML='<i class=\\'fa-solid fa-check\\' style=\\'color:var(--accent-green)\\'></i>'; setTimeout(()=>this.innerHTML='<i class=\\'fa-regular fa-copy\\'></i>', 1500);" style="background:none; border:none; color:var(--text-muted); cursor:pointer; padding:4px;" title="Copy Absolute Path">
         <i class="fa-regular fa-copy"></i>
       </button>
