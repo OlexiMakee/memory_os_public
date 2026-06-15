@@ -21,13 +21,11 @@
         <div style="display: flex; align-items: center; gap: 12px;">
           <h1 style="margin-bottom: 0;">Memory OS</h1>
           <select id="space-select" class="dropdown" style="background: rgba(0,0,0,0.2); color: #fff; border: 1px solid rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px; font-size: 12px; cursor: pointer;" onchange="switchSpace(this.value)">
-            <option value="prod" style="color: #000;">lizards_agent (prod)</option>
-            <option value="dev" style="color: #000;">lizards_agent_dev (dev)</option>
+            <option value="default">default</option>
           </select>
         </div>
         <div style="display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.2); padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
           <button id="btn-draw-edge" onclick="toggleDrawEdgeMode()" style="background: transparent; color: var(--text-muted); border: none; cursor: pointer; font-size: 12px; padding: 2px;" title="Toggle Draw Edge Mode"><i class="fa-solid fa-link"></i></button>
-          <div style="width: 1px; height: 14px; background: rgba(255,255,255,0.2);"></div>
         </div>
       </div>
       <p class="subtitle" style="margin-top: 4px;">Interactive Knowledge Graph Visualizer</p>
@@ -325,6 +323,6 @@
   </div>
 
   <!-- Load our main application logic -->
-  <script src="/app.js?v=5"></script>
+  <script src="app.js"></script>
 </body>
 </html>

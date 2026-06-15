@@ -622,9 +622,9 @@ function updateStatsAndPanel() {
   });
 
   const topConnectedTitle = document.getElementById('top-connected-title');
-  
+
   let sortedNodes = activeNodes.map(n => ({ node: n, deg: nodeDegrees[n.id] || 0 }));
-  
+
   if (window.connectionFilterState === 1) {
     topConnectedTitle.innerHTML = '<i class="fa-solid fa-arrow-trend-down"></i> Lowest Connected';
     sortedNodes = sortedNodes.filter(n => n.deg > 0).sort((a,b) => a.deg - b.deg);
@@ -632,10 +632,10 @@ function updateStatsAndPanel() {
     topConnectedTitle.innerHTML = '<i class="fa-solid fa-link-slash"></i> Isolated Nodes';
     sortedNodes = sortedNodes.filter(n => n.deg === 0);
   } else {
-    topConnectedTitle.innerHTML = '<i class="fa-solid fa-arrow-trend-up"></i> Top Connected';
+    topConnectedTitle.innerHTML = '<i class="fa-solid fa-list"></i> All Nodes';
     sortedNodes = sortedNodes.sort((a,b) => b.deg - a.deg);
   }
-  
+
   vsInit(sortedNodes);
 }
 
@@ -658,19 +658,13 @@ function vsInit(nodesList) {
 function vsRenderBatch() {
   if (vsRendering) return;
   vsRendering = true;
-
   const container = document.getElementById('all-nodes-virtual');
-  if (!container) {
-    vsRendering = false;
-    return;
-  }
+  if (!container) { vsRendering = false; return; }
   const slice = vsNodes.slice(vsRendered, vsRendered + VSCROLL_BATCH);
-
   requestAnimationFrame(() => {
     const frag = document.createDocumentFragment();
     slice.forEach(item => {
       const dotColor = colors.type[item.node.type] || '#94a3b8';
-      const shortId = item.node.id.replace(/^notion[._]?/, '');
       const div = document.createElement('div');
       div.className = 'list-item compact';
       div.title = item.node.id;
@@ -678,7 +672,7 @@ function vsRenderBatch() {
       div.innerHTML =
         '<span class="list-item-title" style="max-width:210px;">' +
           '<span class="color-dot" style="background:' + dotColor + '; margin-right:6px; flex-shrink:0;"></span>' +
-          shortId +
+          item.node.id +
         '</span>' +
         '<span class="list-item-value" style="font-size:10px; flex-shrink:0; margin-left:6px;">' +
           '<i class="fa-solid fa-circle-nodes" style="font-size:9px; margin-right:3px;"></i>' + item.deg +
@@ -687,10 +681,8 @@ function vsRenderBatch() {
     });
     container.appendChild(frag);
     vsRendered += slice.length;
-    
     const countEl = document.getElementById('nodes-list-count');
     if (countEl) countEl.textContent = vsRendered + ' / ' + vsNodes.length;
-    
     vsRendering = false;
   });
 }
@@ -698,9 +690,8 @@ function vsRenderBatch() {
 document.addEventListener('DOMContentLoaded', () => {
   const container = document.getElementById('all-nodes-virtual');
   if (container) {
-    container.addEventListener('scroll', function () {
-      const remaining = this.scrollHeight - this.scrollTop - this.clientHeight;
-      if (remaining < 120 && vsRendered < vsNodes.length) {
+    container.addEventListener('scroll', function() {
+      if (this.scrollHeight - this.scrollTop - this.clientHeight < 120 && vsRendered < vsNodes.length) {
         vsRenderBatch();
       }
     });
@@ -867,7 +858,7 @@ async function auditorAction(name, action) {
   }
 }
 
-// Start everything
+// Start everything — restore last selected space from localStorage
 const savedSpace = localStorage.getItem('memory_os_space');
 if (savedSpace) {
   const selectEl = document.getElementById('space-select');
