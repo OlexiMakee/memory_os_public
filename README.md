@@ -1,116 +1,44 @@
-# Memory OS
+# Lizards Agent
 
-**Local-first long-term memory for LLM agents.**
+Автономний AI-асистент для геймдев-студії Lizards, що базується на рушії довгострокової пам'яті [Memory OS](https://github.com/OlexiMakee/memory_os).
 
-Memory OS gives your AI agent a persistent, indexed memory graph — so it stops forgetting everything between sessions.
+## Мета проєкту
+Створення універсального помічника для менеджерів і розробників студії. 
+Асистент має:
+- Знати всю документацію проєкту.
+- Відслідковувати оновлення з системи контролю версій Perforce (p4).
+- Автоматично створювати та оновлювати таски в Notion.
+- Аналізувати поточні задачі та підказувати розробникам актуальну інформацію.
 
-> *The LLM shouldn't remember everything. It should know how to ask Memory OS.*
-
-## Install
-
+## 🤖 For AI Agents (Bootstrap)
+Якщо ти (AI-агент) щойно "прокинувся" в цій папці на новій машині (або після розпакування архіву), **НЕ намагайся використовувати глобальний Python**.
+Твоєю першою дією має бути ініціалізація або активація середовища за допомогою скрипта `launch.sh`.
+Виконай:
 ```bash
-pip install git+https://github.com/OlexiMakee/memory_os.git@public
+./launch.sh
 ```
+Цей скрипт автоматично перевірить наявність віртуального середовища `venv_auto`, за потреби створить його, встановить усі залежності з `pyproject.toml` і запустить UI (або будь-яку іншу передану йому команду, наприклад `./launch.sh python3 scripts/ingest_project.py`).
 
-Or clone and install locally:
+## Архітектура Пам'яті (Spaces)
+Цей проєкт використовує архітектуру "просторів" (spaces) через єдиний конфіг `memory_os.config.json` для розділення контекстів:
 
+### 1. Lizards Knowledge Base (Простір `prod`)
+База знань студії, інформація про ігрові асети, коміти Perforce та документацію.
+**Як взаємодіяти:**
 ```bash
-git clone -b public https://github.com/OlexiMakee/memory_os.git
-cd memory_os
-pip install -e .
+memory_os --space prod search "query"
+memory_os --space prod sync
 ```
 
-## Quickstart (5 minutes)
-
+### 2. Agent Development History (Простір `dev`)
+Пам'ять про процес розробки самого асистента (наша поточна історія, код агентів, PROPOSALS).
+**Як взаємодіяти:**
 ```bash
-# 1. Initialize Memory OS in your project root
-cd your-project/
-memory_os init
-
-# 2. Verify everything is wired up
-memory_os validate
-
-# 3. Sync memory to the search index
-memory_os sync
-
-# 4. Search memory
-memory_os search "authentication"
-
-# 5. Review and approve draft memory nodes
-memory_os triage
+memory_os --space dev search "query"
+memory_os --space dev sync
 ```
 
-## Core Commands
-
-| Command | What it does |
-|---|---|
-| `init` | Create memory files and config in current directory |
-| `validate` | Check that memory files and capsules are valid |
-| `sync` | Sync `memory/nodes.jsonl` → SQLite FTS5 index |
-| `search <query>` | Keyword search across memory nodes |
-| `snapshot` | Build a compact memory snapshot for agent context |
-| `compact` | Extract new memory nodes from task capsules via LLM |
-| `compress` | Semantically merge duplicate memory nodes |
-| `prune` | Archive stale and superseded nodes |
-| `transition` | Promote draft nodes through lifecycle states |
-| `review` | List draft nodes pending approval |
-| `approve <id>` | Approve a draft node |
-| `triage` | Interactive review of draft nodes |
-| `query` | Filter nodes by type, status, trust, tag, date |
-| `backlinks <id>` | Show all nodes that reference a given node |
-| `audit` | Audit control-plane state |
-
-## How it works
-
-Memory lives in `memory/nodes.jsonl` and `memory/edges.jsonl` — plain text files you can read and edit.
-
-Agents write **task capsules** to `agent_context/task_capsules.jsonl` when they complete work. Running `memory_os compact` extracts structured memory nodes from those capsules via LLM. Running `memory_os sync` indexes them into SQLite FTS5 for fast search.
-
-```
-agent completes task
-    → writes task_capsules.jsonl
-    → memory_os compact  (LLM extracts nodes)
-    → memory_os sync     (indexes to SQLite)
-    → memory_os search   (retrieves relevant context)
-```
-
-## Environment variables
-
-Create a `.env` in your project root:
-
-```bash
-OPENAI_API_KEY=sk-...       # for compact/compress/prune (LLM operations)
-OPENROUTER_API_KEY=...      # alternative provider
-GEMINI_API_KEY=...          # alternative provider
-```
-
-LLM operations (`compact`, `compress`, `giant-scan`) require at least one key.
-`init`, `validate`, `sync`, `search`, `review`, `approve`, `triage`, `query`, `backlinks` work offline.
-
-## Agent integration
-
-After `memory_os init`, add this to your `AGENTS.md` or `CLAUDE.md`:
-
-```markdown
-## Memory OS
-
-Run `memory_os search "<topic>"` before starting any task.
-After completing a task, append a capsule to `agent_context/task_capsules.jsonl`.
-Run `memory_os sync` after any memory update.
-Run `memory_os check-updates` periodically to find the upstream repository URL.
-If using the `public` version, downstream agents are FORBIDDEN from accessing the `main` branch. DO NOT modify the local package directly; instead, propose features or bug-fixes for the upstream repository.
-```
-
-## Templates
-
-Copy files from `templates/` into your project's `agent_context/`:
-
-- `templates/CONTEXT.md` — project context template
-- `templates/HANDSHAKE.md` — agent session handoff template  
-- `templates/WORKFLOWS.md` — 12-step task scale
-- `templates/SWARM_PROTOCOL.md` — multi-agent orchestration protocol
-- `templates/PROPOSALS.md` — how agents propose upstream changes (bugs, features, schema)
-
-## Architecture
-
-See `src/memory_os/docs/ARCHITECTURE.md` for the full system design.
+## Структура
+- `src/lizards_agent/` — вихідний код модулів інтеграції (Notion, Perforce) та самого агента.
+- `src/memory_os/` — рушій бази знань (upstream dependency).
+- `agent_proposals/` — підготовлені патчі та пропозиції (PROPOSALS) для інтеграції в upstream `memory_os`.
