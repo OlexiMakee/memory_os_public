@@ -343,6 +343,7 @@ def cmd_link_infer(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     exclude = set(t.strip() for t in (args.exclude_types or "").split(",") if t.strip())
     return inferrer.run(
         method=args.method,
+        resource_mode=getattr(args, "resource_mode", None) or None,
         dry_run=args.dry_run,
         min_score=args.min_score,
         provider=getattr(args, "provider", None),
@@ -1428,9 +1429,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     link_infer_parser.add_argument(
         "--method",
-        choices=["text", "llm", "both"],
-        default="both",
-        help="Edge discovery method: text (offline keyword matching), llm (semantic via LLM), both (default).",
+        choices=["cascade", "text", "llm", "both"],
+        default="cascade",
+        help="Edge discovery method: cascade (default — BM25+structural+tags+temporal then LLM on unlinked), text, llm, both.",
+    )
+    link_infer_parser.add_argument(
+        "--resource-mode",
+        choices=["quiet", "normal", "max"],
+        default=None,
+        dest="resource_mode",
+        help="Resource budget: quiet (Stage 0 only), normal (+ embeddings when available), max (+ local LM). Defaults to config value.",
     )
     link_infer_parser.add_argument(
         "--dry-run",

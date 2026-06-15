@@ -28,6 +28,8 @@ class EdgeType(str, Enum):
     CAUSED_BY = "caused_by"
     FIXED_BY = "fixed_by"
     STRATEGIC_CONSEQUENCE = "strategic_consequence"
+    CO_TAGGED = "co_tagged"    # shared tags indicate topical relation
+    CO_CREATED = "co_created"  # created in same time window with topic overlap
 
 @dataclass
 class MemoryNode:
