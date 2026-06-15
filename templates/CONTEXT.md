@@ -34,4 +34,4 @@ Never print `.env` values. Required vars:
 
 ## Upstream Updates
 - **Check for updates**: Run `python3 -m memory_os check-updates`.
-- **Proposing Fixes**: If using the `public` version, you are FORBIDDEN from accessing the `main` branch. Do NOT modify the core Memory OS engine code directly in this downstream project. If you find a bug or need a feature in Memory OS, ONLY propose it (e.g. by writing to `agent_proposals/` or instructing the user to open a PR on the upstream repository).
+- **Proposing Fixes**: If using the `public` version, you are FORBIDDEN from accessing the `main` branch. Do NOT modify the core Memory OS engine code directly in this downstream project. If you find a bug or need a feature in Memory OS, follow `templates/PROPOSALS.md` — it defines exactly how to structure and submit an upstream proposal.
