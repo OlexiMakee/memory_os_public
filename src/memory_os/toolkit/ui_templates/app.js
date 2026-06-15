@@ -180,9 +180,15 @@ window.initiateMerge = function() {
 };
 
 async function initApp() {
+  if (typeof ForceGraph3D === 'undefined') {
+    document.getElementById('3d-graph').innerHTML =
+      '<div style="color:#f87171;padding:40px;font-family:monospace;font-size:14px;">' +
+      '⚠ 3D graph library failed to load. Check network connection.</div>';
+    return;
+  }
   try {
     const res = await fetch('/api/graph');
-    if (!res.ok) throw new Error('Failed to fetch graph data');
+    if (!res.ok) throw new Error('Failed to fetch graph data: ' + res.status);
     gDataFull = await res.json();
     applyNodeTypeFilter();
     buildNodeTypeToggles();
@@ -858,15 +864,38 @@ async function auditorAction(name, action) {
   }
 }
 
-// Start everything — restore last selected space from localStorage
-const savedSpace = localStorage.getItem('memory_os_space');
-if (savedSpace) {
-  const selectEl = document.getElementById('space-select');
-  if (selectEl) selectEl.value = savedSpace;
-  switchSpace(savedSpace);
-} else {
-  initApp();
-}
+// Apply project title from server injection
+(function applyProjectTitle() {
+  const name = window.PROJECT_NAME;
+  if (!name || name === 'memory_os' || name === 'memory-os') return;
+  const titleEl = document.getElementById('project-title');
+  const poweredEl = document.getElementById('project-powered');
+  if (titleEl) titleEl.textContent = name;
+  if (poweredEl) poweredEl.style.display = 'block';
+  document.title = name + ' — Memory OS';
+})();
+
+// Start everything — restore last selected space from localStorage,
+// but only if the server recognises it (guards against stale cache pointing to a deleted space).
+(async () => {
+  const savedSpace = localStorage.getItem('memory_os_space');
+  if (savedSpace && savedSpace !== 'default') {
+    try {
+      const r = await fetch('/api/spaces');
+      const d = r.ok ? await r.json() : { spaces: [] };
+      if (!d.spaces.includes(savedSpace)) {
+        localStorage.removeItem('memory_os_space');
+        initApp();
+        return;
+      }
+    } catch (_) { /* server not ready yet, fall through */ }
+    const selectEl = document.getElementById('space-select');
+    if (selectEl) selectEl.value = savedSpace;
+    switchSpace(savedSpace);
+  } else {
+    initApp();
+  }
+})();
 fetchSpaces();
 setInterval(fetchAuditors, 1000);
 fetchAuditors();

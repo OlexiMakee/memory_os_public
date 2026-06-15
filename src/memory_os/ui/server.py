@@ -129,8 +129,15 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
             with open(target_file, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            root_path = str(self.server.provider.config.root_dir)
-            script_injection = f'<script>window.WORKSPACE_ROOT = {json.dumps(root_path)};</script>\n</head>'
+            cfg = self.server.provider.config
+            root_path = str(cfg.root_dir)
+            project_name = cfg.data.get("name") or cfg.root_dir.name
+            script_injection = (
+                f'<script>'
+                f'window.WORKSPACE_ROOT = {json.dumps(root_path)};'
+                f'window.PROJECT_NAME = {json.dumps(project_name)};'
+                f'</script>\n</head>'
+            )
             content = content.replace('</head>', script_injection)
             
             self.wfile.write(content.encode('utf-8'))
@@ -167,7 +174,14 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
                 post_data = self.rfile.read(content_length)
                 payload = json.loads(post_data.decode("utf-8"))
                 new_space = payload.get("space", "default")
-                
+
+                # Validate: non-default spaces must have an existing directory with data
+                if new_space != "default":
+                    memory_base = self.server.provider.config.root_dir / self.server.provider.config.data.get("memory_dir", "memory")
+                    space_dir = memory_base / new_space
+                    if not space_dir.exists() or not (space_dir / "nodes.jsonl").exists():
+                        new_space = "default"
+
                 self.server.provider.config.space = new_space
                 from memory_os.core.storage import FileSystemMemoryStorage
                 from memory_os.core.repository import MemoryRepository
