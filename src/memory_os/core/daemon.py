@@ -152,6 +152,8 @@ class MemoryDaemon:
         self.alerts = AlertManager(config)
         self._setup_logging()
         self.last_mtime = 0.0
+        self._last_change_time: float = 0.0  # debounce: wall-clock time of last detected mtime change
+        self._transcript_cursor: int = self._load_cursor()  # line count at last successful ingestion
         self.http_server = None
 
         self.auditor_manager = AuditorManager()
@@ -191,6 +193,7 @@ class MemoryDaemon:
             "status": "running" if self.is_running else "stopped",
             "pid": os.getpid(),
             "last_activity_time": datetime.now().isoformat(timespec="seconds"),
+            "transcript_cursor": self._transcript_cursor,
             "config": {
                 "space": self.config.space,
                 "transcript_path": str(self.transcript_path),
@@ -248,47 +251,105 @@ class MemoryDaemon:
         self.logger.info(f"Received signal {signum}, shutting down...")
         self.is_running = False
 
+    # How many seconds of silence after the last write before we process.
+    _DEBOUNCE_SECS: float = 3.0
+
+    def _count_lines(self) -> int:
+        """Count lines in transcript file using binary read (fast, cross-platform)."""
+        try:
+            with open(self.transcript_path, "rb") as f:
+                return sum(1 for _ in f)
+        except OSError:
+            return 0
+
+    def _load_cursor(self) -> int:
+        """Load transcript line cursor from daemon status file (survives restarts)."""
+        try:
+            if self.status_file.exists():
+                data = json.loads(self.status_file.read_text(encoding="utf-8"))
+                return int(data.get("transcript_cursor", 0))
+        except Exception:
+            pass
+        return 0
+
+    def _do_ingest(self):
+        """Run TranscriptIngestor and update status. Extracted for reuse by force-sync IPC."""
+        try:
+            ingestor = TranscriptIngestor(self.config)
+            capsules = ingestor.ingest(self.transcript_path, provider="gemini", model="")
+
+            from datetime import datetime
+            status_data = {}
+            if self.status_file.exists():
+                try:
+                    status_data = json.loads(self.status_file.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            status_data["last_ingestion_time"] = datetime.now().isoformat(timespec="seconds")
+            status_data["last_ingestion_error"] = None
+            status_data["transcript_cursor"] = self._transcript_cursor
+            self.status_file.write_text(json.dumps(status_data, indent=2), encoding="utf-8")
+
+            if capsules:
+                self.logger.info(f"Extracted {len(capsules)} task capsules.")
+            else:
+                self.logger.info("No new completed tasks found in transcript.")
+        except Exception as e:
+            self.logger.error(f"Error during ingestion: {e}", exc_info=True)
+            self.alerts.send_alert("Memory OS Daemon Error", str(e), is_critical=True)
+            self.write_status(error=str(e))
+
     def check_file(self, force: bool = False):
         if not self.transcript_path.exists():
             return
 
         current_mtime = os.path.getmtime(self.transcript_path)
+
+        # First run: record baseline without processing.
         if self.last_mtime == 0.0 and not force:
-            # First run, just record the time
             self.last_mtime = current_mtime
-            self.logger.info(f"Baseline established for {self.transcript_path.name}")
+            self._transcript_cursor = self._count_lines()
+            self.logger.info(
+                f"Baseline: {self.transcript_path.name} "
+                f"({self._transcript_cursor} lines already present, will process only new lines)"
+            )
             self.write_status()
             return
 
-        if force or current_mtime > self.last_mtime:
-            self.logger.info(f"Detected changes/force sync in {self.transcript_path.name}. Triggering ingestion...")
-            try:
-                ingestor = TranscriptIngestor(self.config)
-                # Defaults to cheap models for background tasks to save cost
-                capsules = ingestor.ingest(self.transcript_path, provider="gemini", model="")
+        if force:
+            self._do_ingest()
+            self.last_mtime = current_mtime
+            return
 
-                # Update status
-                from datetime import datetime
-                status_data = {}
-                if self.status_file.exists():
-                    try:
-                        status_data = json.loads(self.status_file.read_text(encoding="utf-8"))
-                    except Exception:
-                        pass
-                status_data["last_ingestion_time"] = datetime.now().isoformat(timespec="seconds")
-                status_data["last_ingestion_error"] = None
-                self.status_file.write_text(json.dumps(status_data, indent=2), encoding="utf-8")
+        now = time.time()
 
-                if capsules:
-                    self.logger.info(f"Successfully extracted {len(capsules)} task capsules.")
-                else:
-                    self.logger.info("No new completed tasks found in transcript.")
-            except Exception as e:
-                self.logger.error(f"Error during ingestion: {e}", exc_info=True)
-                self.alerts.send_alert("Memory OS Daemon Error", str(e), is_critical=True)
-                self.write_status(error=str(e))
-            finally:
-                self.last_mtime = current_mtime
+        # Mark the moment we first see a new mtime.
+        if current_mtime > self.last_mtime:
+            self.last_mtime = current_mtime
+            if self._last_change_time == 0.0:
+                self._last_change_time = now
+
+        # Nothing pending.
+        if self._last_change_time == 0.0:
+            return
+
+        # Wait for the file to stop changing (debounce).
+        if now - self._last_change_time < self._DEBOUNCE_SECS:
+            return
+
+        # Confirm the file actually grew — avoids LLM call on metadata-only updates.
+        new_line_count = self._count_lines()
+        if new_line_count <= self._transcript_cursor:
+            self._last_change_time = 0.0
+            return
+
+        self.logger.info(
+            f"{new_line_count - self._transcript_cursor} new lines in "
+            f"{self.transcript_path.name} — triggering ingestion."
+        )
+        self._transcript_cursor = new_line_count
+        self._last_change_time = 0.0
+        self._do_ingest()
 
     def run_telemetry_analysis(self):
         analyzer = OSPerformanceAnalyzer(self.config)
