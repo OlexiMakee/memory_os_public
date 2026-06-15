@@ -381,22 +381,27 @@ def infer_temporal(
 def infer_embeddings(
     nodes: List[dict],
     existing_pairs: Set[Tuple[str, str]],
+    config=None,
     top_k: int = 5,
     min_cosine: float = 0.75,
 ) -> List[MemoryEdge]:
     """
-    Placeholder for Stage 1: sentence-transformer cosine similarity.
+    Stage 1: local embedding similarity via Ollama nomic-embed-text.
 
-    M4:  sentence-transformers + Metal  (~15ms/node, ~22MB model)
-    GPU: FAISS + CUDA on RTX 3060 Ti    (~1ms/node, larger models)
+    M4:         ~15ms/node via Metal, 22MB model, cached after first run
+    RTX 3060Ti: FAISS CUDA path (future — add faiss-gpu to deps)
 
-    Returns [] until a local embedding provider is configured.
+    Requires: ollama pull nomic-embed-text
+    Returns [] if Ollama is unavailable or not yet configured.
     """
     try:
-        from memory_os.toolkit.embedding_provider import EmbeddingProvider  # type: ignore
-        provider = EmbeddingProvider()
+        from memory_os.toolkit.embedding_provider import EmbeddingProvider
+        from memory_os.core.resource_guard import ResourceGuard
+        guard    = ResourceGuard()
+        provider = EmbeddingProvider(config=config, guard=guard)
         return provider.infer_edges(nodes, existing_pairs, top_k=top_k, min_cosine=min_cosine)
-    except ImportError:
+    except Exception as exc:
+        logger.info(f"[LinkInferrer] Stage 1 embeddings unavailable: {exc}")
         return []
 
 
@@ -669,7 +674,7 @@ class LinkInferrer:
 
             # Stage 1: local embeddings (normal / max)
             if rmode in ("normal", "max"):
-                emb_edges = infer_embeddings(nodes, set(existing_pairs))
+                emb_edges = infer_embeddings(nodes, set(existing_pairs), config=self.config)
                 if emb_edges:
                     print(f"  Embeddings: {len(emb_edges):4d} candidates")
                     all_candidates.extend(emb_edges)

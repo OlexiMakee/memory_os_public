@@ -32,10 +32,28 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_cors_headers()
         self.end_headers()
 
+    def _json_response(self, data: dict, status: int = 200):
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self._send_cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
-        
+
+        if path == '/api/system/load':
+            try:
+                from memory_os.core.resource_guard import ResourceGuard
+                snap = ResourceGuard().snapshot()
+                self._json_response(snap.to_dict())
+            except Exception as exc:
+                self._json_response({"cpu": 0, "ram": 0, "temp": None,
+                                     "level": "unknown", "error": str(exc)})
+            return
+
         # --- API ROUTES ---
         if path == '/api/graph':
             self.send_response(200)
@@ -280,6 +298,35 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.send_error(400, "Missing payload")
             return
         
+        elif path == '/api/link-infer':
+            content_length = int(self.headers.get('Content-Length', 0))
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8")) if content_length else {}
+            method        = payload.get("method", "cascade")
+            resource_mode = payload.get("resource_mode", "quiet")
+            dry_run       = payload.get("dry_run", False)
+
+            import subprocess, sys as _sys
+            root = str(self.server.provider.config.root_dir)
+            cmd  = [_sys.executable, "-m", "memory_os", "--root", root,
+                    "link-infer", "--method", method, "--resource-mode", resource_mode]
+            if dry_run:
+                cmd.append("--dry-run")
+
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+                output = (result.stdout + result.stderr).strip()
+                self._json_response({
+                    "status": "ok" if result.returncode == 0 else "error",
+                    "output": output,
+                    "returncode": result.returncode,
+                })
+            except subprocess.TimeoutExpired:
+                self._json_response({"status": "timeout",
+                                     "output": "Link inference timed out after 180s."})
+            except Exception as exc:
+                self._json_response({"status": "error", "output": str(exc)}, status=500)
+            return
+
         self.send_error(404, "Not Found")
 
 class MemoryOSServer(HTTPServer):

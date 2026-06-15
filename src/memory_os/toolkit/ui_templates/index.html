@@ -203,6 +203,55 @@
           </div>
           
           <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
+            <h3 style="font-size: 11px; margin: 0 0 8px 0; color: var(--text-muted);"><i class="fa-solid fa-diagram-project"></i> Link Inference</h3>
+
+            <!-- System load bar -->
+            <div id="li-load-bar" style="display:flex; gap:8px; align-items:center; margin-bottom:8px; font-size:10px; color:var(--text-muted);">
+              <span>CPU <span id="li-cpu">—</span>%</span>
+              <div style="flex:1; height:4px; background:rgba(255,255,255,0.1); border-radius:2px;">
+                <div id="li-cpu-bar" style="height:4px; width:0%; border-radius:2px; background:#4ade80; transition:width 0.4s;"></div>
+              </div>
+              <span>RAM <span id="li-ram">—</span>%</span>
+              <div style="flex:1; height:4px; background:rgba(255,255,255,0.1); border-radius:2px;">
+                <div id="li-ram-bar" style="height:4px; width:0%; border-radius:2px; background:#4ade80; transition:width 0.4s;"></div>
+              </div>
+              <span id="li-level" style="font-weight:600;">…</span>
+            </div>
+
+            <!-- Controls -->
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:6px;">
+              <div>
+                <div style="font-size:10px; color:var(--text-muted); margin-bottom:2px;">Method</div>
+                <select id="li-method" class="dropdown" style="width:100%; box-sizing:border-box; font-size:11px;">
+                  <option value="cascade" selected>cascade</option>
+                  <option value="text">text</option>
+                  <option value="llm">llm</option>
+                  <option value="both">both</option>
+                </select>
+              </div>
+              <div>
+                <div style="font-size:10px; color:var(--text-muted); margin-bottom:2px;">Resource mode</div>
+                <select id="li-resource-mode" class="dropdown" style="width:100%; box-sizing:border-box; font-size:11px;">
+                  <option value="quiet" selected>quiet (Stage 0)</option>
+                  <option value="normal">normal (+ embed)</option>
+                  <option value="max">max (+ local LM)</option>
+                </select>
+              </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+              <label style="font-size:11px; color:var(--text-main); display:flex; align-items:center; gap:4px; cursor:pointer;">
+                <input type="checkbox" id="li-dry-run"> dry run
+              </label>
+              <button id="li-run-btn" onclick="runLinkInfer()" style="flex:1; background:rgba(99,102,241,0.15); border:1px solid rgba(99,102,241,0.3); color:#a5b4fc; border-radius:4px; cursor:pointer; padding:5px 10px; font-size:11px;">
+                <i class="fa-solid fa-play"></i> Run
+              </button>
+            </div>
+
+            <!-- Output -->
+            <pre id="li-output" style="display:none; font-size:10px; color:var(--text-main); background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.07); border-radius:4px; padding:8px; max-height:120px; overflow-y:auto; white-space:pre-wrap; margin:0;"></pre>
+          </div>
+
+          <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
             <button id="reset-settings-btn" style="width: 100%; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2); color: #ef4444; border-radius: 4px; cursor: pointer; padding: 6px 12px; font-size: 11px; transition: background 0.2s;">
               Reset to Defaults
             </button>

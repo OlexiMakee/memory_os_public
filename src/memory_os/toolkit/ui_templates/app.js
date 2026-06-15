@@ -967,6 +967,88 @@ function applySettingsToUI(s) {
   applyBgColor(s.bgColor || '#0b0f19');
 }
 
+// ---------------------------------------------------------------------------
+// Link Inference UI
+// ---------------------------------------------------------------------------
+
+let _loadPollTimer = null;
+
+function _loadLevelColor(level) {
+  return level === 'hot' ? '#f87171' : level === 'warm' ? '#fbbf24' : '#4ade80';
+}
+
+function refreshSystemLoad() {
+  fetch('/api/system/load')
+    .then(r => r.json())
+    .then(d => {
+      const cpu = d.cpu ?? 0, ram = d.ram ?? 0, level = d.level ?? 'cool';
+      const color = _loadLevelColor(level);
+      const cpuEl = document.getElementById('li-cpu');
+      const ramEl = document.getElementById('li-ram');
+      const cpuBar = document.getElementById('li-cpu-bar');
+      const ramBar = document.getElementById('li-ram-bar');
+      const lvlEl  = document.getElementById('li-level');
+      if (cpuEl)  cpuEl.textContent  = Math.round(cpu);
+      if (ramEl)  ramEl.textContent  = Math.round(ram);
+      if (cpuBar) { cpuBar.style.width = cpu + '%'; cpuBar.style.background = color; }
+      if (ramBar) { ramBar.style.width = ram + '%'; ramBar.style.background = color; }
+      if (lvlEl)  { lvlEl.textContent = level; lvlEl.style.color = color; }
+      if (d.temp != null) {
+        lvlEl.textContent = level + ' ' + Math.round(d.temp) + '°C';
+      }
+    })
+    .catch(() => {});
+}
+
+function startLoadPolling() {
+  refreshSystemLoad();
+  if (!_loadPollTimer) _loadPollTimer = setInterval(refreshSystemLoad, 5000);
+}
+
+function stopLoadPolling() {
+  if (_loadPollTimer) { clearInterval(_loadPollTimer); _loadPollTimer = null; }
+}
+
+function runLinkInfer() {
+  const method   = document.getElementById('li-method')?.value || 'cascade';
+  const resMode  = document.getElementById('li-resource-mode')?.value || 'quiet';
+  const dryRun   = document.getElementById('li-dry-run')?.checked || false;
+  const btn      = document.getElementById('li-run-btn');
+  const out      = document.getElementById('li-output');
+
+  if (btn)  { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Running…'; }
+  if (out)  { out.style.display = 'block'; out.textContent = 'Starting…'; }
+
+  fetch('/api/link-infer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ method, resource_mode: resMode, dry_run: dryRun }),
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (out) out.textContent = d.output || '(no output)';
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-play"></i> Run'; }
+      // Reload graph if edges were actually written (not dry run)
+      if (!dryRun && d.status === 'ok') initApp();
+    })
+    .catch(err => {
+      if (out) out.textContent = 'Error: ' + err;
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-play"></i> Run'; }
+    });
+}
+
+// Start load polling when settings accordion opens
+const _origToggleSettings = window.toggleSettingsAccordion;
+window.toggleSettingsAccordion = function() {
+  if (typeof _origToggleSettings === 'function') _origToggleSettings();
+  const body = document.getElementById('settings-accordion-body');
+  if (body && body.style.display !== 'none') {
+    startLoadPolling();
+  } else {
+    stopLoadPolling();
+  }
+};
+
 function applyBgColor(color) {
   document.documentElement.style.setProperty('--bg-main', color);
   try { if (Graph && typeof Graph.backgroundColor === 'function') Graph.backgroundColor(color); } catch(e) {}
