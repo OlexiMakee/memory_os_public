@@ -1,4 +1,62 @@
 let gData = { nodes: [], links: [] };
+let gDataFull = { nodes: [], links: [] };
+
+function applyNodeTypeFilter() {
+  const hidden = window.hiddenNodeTypes || new Set();
+  if (hidden.size === 0) {
+    gData = { nodes: [...gDataFull.nodes], links: [...gDataFull.links] };
+  } else {
+    const visibleIds = new Set(gDataFull.nodes.filter(n => !hidden.has(n.type)).map(n => n.id));
+    gData = {
+      nodes: gDataFull.nodes.filter(n => visibleIds.has(n.id)),
+      links: gDataFull.links.filter(l => {
+        const s = typeof l.source === 'object' ? l.source.id : l.source;
+        const t = typeof l.target === 'object' ? l.target.id : l.target;
+        return visibleIds.has(s) && visibleIds.has(t);
+      }),
+    };
+  }
+  if (Graph) {
+    Graph.graphData(gData);
+    updateStatsAndPanel();
+  }
+}
+
+function buildNodeTypeToggles() {
+  const container = document.getElementById('node-type-toggles');
+  if (!container) return;
+  const allTypes = [...new Set(gDataFull.nodes.map(n => n.type))].sort();
+  const hidden = window.hiddenNodeTypes || new Set();
+  container.innerHTML = '';
+  allTypes.forEach(type => {
+    const isHidden = hidden.has(type);
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;';
+    const color = (colors.type && colors.type[type]) ? colors.type[type] : '#94a3b8';
+    const count = gDataFull.nodes.filter(n => n.type === type).length;
+    row.innerHTML = `
+      <span style="font-size:11px;color:var(--text-main);display:flex;align-items:center;gap:6px;">
+        <span style="width:8px;height:8px;border-radius:50%;background:${color};display:inline-block;"></span>
+        ${type} <span style="color:var(--text-muted)">(${count})</span>
+      </span>
+      <label class="switch" style="position:relative;display:inline-block;width:34px;height:20px;">
+        <input type="checkbox" data-node-type="${type}" ${isHidden ? '' : 'checked'} style="opacity:0;width:0;height:0;">
+        <span class="slider" style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background-color:${isHidden ? 'rgba(255,255,255,0.2)' : color + '99'};transition:.4s;border-radius:20px;">
+          <span class="slider-dot" style="position:absolute;height:14px;width:14px;left:${isHidden ? '3' : '17'}px;bottom:3px;background-color:white;transition:.4s;border-radius:50%;"></span>
+        </span>
+      </label>`;
+    const checkbox = row.querySelector('input[type=checkbox]');
+    checkbox.addEventListener('change', (e) => {
+      if (!e.target.checked) hidden.add(type); else hidden.delete(type);
+      window.hiddenNodeTypes = hidden;
+      saveSetting('hiddenNodeTypes', [...hidden]);
+      applyNodeTypeFilter();
+      buildNodeTypeToggles();
+    });
+    container.appendChild(row);
+  });
+}
+
 let Graph;
 
 // Color definitions
@@ -76,11 +134,57 @@ window.switchSpace = async function(newSpace) {
   }
 };
 
+let drawEdgeMode = false;
+let drawEdgeSource = null;
+
+let mergeMode = false;
+let mergeSource = null;
+
+window.toggleDrawEdgeMode = function() {
+  drawEdgeMode = !drawEdgeMode;
+  drawEdgeSource = null;
+  const btn = document.getElementById('btn-draw-edge');
+  if (drawEdgeMode) {
+    btn.style.color = '#4ade80';
+    alert("Draw Link Mode: Select the source node, then select the target node to create a link.");
+  } else {
+    btn.style.color = 'var(--text-muted)';
+  }
+};
+
+window.verifyCurrentNode = async function() {
+  if (!window.focusedNode) return;
+  try {
+    const res = await fetch('/api/nodes/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: window.focusedNode.id })
+    });
+    if (res.ok) {
+      alert(`Node ${window.focusedNode.id} has been verified and locked.`);
+      initApp();
+    } else {
+      alert("Failed to verify node.");
+    }
+  } catch (err) {
+    console.error(err);
+  }
+};
+
+window.initiateMerge = function() {
+  if (!window.focusedNode) return;
+  mergeMode = true;
+  mergeSource = window.focusedNode.id;
+  alert(`Merge Mode: Select the target node to merge "${window.focusedNode.id}" INTO.`);
+};
+
 async function initApp() {
   try {
     const res = await fetch('/api/graph');
     if (!res.ok) throw new Error('Failed to fetch graph data');
-    gData = await res.json();
+    gDataFull = await res.json();
+    applyNodeTypeFilter();
+    buildNodeTypeToggles();
   } catch (err) {
     console.error(err);
     alert('Failed to load Memory OS graph data. Is the UI server running in a valid project?');
@@ -204,6 +308,56 @@ function getNodeColor(node) {
 }
 
 function focusOnNode(node) {
+  if (drawEdgeMode) {
+    if (!drawEdgeSource) {
+      drawEdgeSource = node;
+      alert(`Source selected: ${node.id}. Now select target node.`);
+    } else {
+      if (node.id === drawEdgeSource.id) {
+        alert("Cannot link to self.");
+        drawEdgeSource = null;
+        return;
+      }
+      fetch('/api/edges/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: drawEdgeSource.id, target: node.id })
+      }).then(res => {
+        if (res.ok) {
+           alert("Link created!");
+           drawEdgeSource = null;
+           toggleDrawEdgeMode();
+           initApp();
+        }
+      });
+    }
+    return;
+  }
+  
+  if (mergeMode) {
+    if (node.id === mergeSource) {
+       alert("Cannot merge to self.");
+       mergeMode = false; mergeSource = null;
+       return;
+    }
+    if (confirm(`Are you sure you want to merge "${mergeSource}" INTO "${node.id}"? This will delete ${mergeSource}.`)) {
+      fetch('/api/nodes/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: mergeSource, target: node.id })
+      }).then(res => {
+        if (res.ok) {
+           alert("Nodes merged!");
+           mergeMode = false; mergeSource = null;
+           initApp();
+        }
+      });
+    } else {
+      mergeMode = false; mergeSource = null;
+    }
+    return;
+  }
+
   window.focusedNode = node;
   window.lastFocusTime = Date.now();
 
@@ -695,7 +849,8 @@ const defaultSettings = {
   velocityDecay: 0.4,
   autoRotate: false,
   autoRotateSpeed: 1.0,
-  showLeafLinks: false
+  showLeafLinks: false,
+  hiddenNodeTypes: []
 };
 
 const SETTINGS_KEY = 'memory_os_graph_settings';
@@ -759,6 +914,7 @@ function applySettingsToUI(s) {
     document.getElementById('show-leaf-links-toggle').checked = s.showLeafLinks;
     window.showLeafLinks = s.showLeafLinks;
   }
+  window.hiddenNodeTypes = new Set(Array.isArray(s.hiddenNodeTypes) ? s.hiddenNodeTypes : []);
 }
 
 function applySettingsToGraph(s) {

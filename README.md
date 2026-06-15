@@ -109,7 +109,6 @@ Copy files from `templates/` into your project's `agent_context/`:
 - `templates/HANDSHAKE.md` — agent session handoff template  
 - `templates/WORKFLOWS.md` — 12-step task scale
 - `templates/SWARM_PROTOCOL.md` — multi-agent orchestration protocol
-- `templates/PROPOSALS.md` — how agents propose upstream changes (bugs, features, schema)
 
 ## Architecture
 

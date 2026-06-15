@@ -177,6 +177,108 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
             else:
                 self.send_error(400, "Missing payload")
             return
+            
+        elif path == '/api/nodes/verify':
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length > 0:
+                payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                node_id = payload.get("id")
+                repo = self.server.provider.repo
+                nodes = repo.get_nodes()
+                for n in nodes:
+                    if n.id == node_id:
+                        n.trust = "verified"
+                        n.protocol_level = 99
+                        break
+                repo.save_nodes(nodes)
+                
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self._send_cors_headers()
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+            else:
+                self.send_error(400, "Missing payload")
+            return
+            
+        elif path == '/api/edges/create':
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length > 0:
+                payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                from memory_os.core.models import MemoryEdge
+                edge = MemoryEdge(
+                    source=payload.get("source"),
+                    target=payload.get("target"),
+                    type=payload.get("type", "depends_on"),
+                    confidence=1.0,
+                    reason="Manual link created by user via UI"
+                )
+                repo = self.server.provider.repo
+                repo.add_edge(edge)
+                
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self._send_cors_headers()
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+            else:
+                self.send_error(400, "Missing payload")
+            return
+            
+        elif path == '/api/nodes/merge':
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length > 0:
+                payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                source_id = payload.get("source") # node to delete
+                target_id = payload.get("target") # node to keep
+                repo = self.server.provider.repo
+                
+                nodes = repo.get_nodes()
+                edges = repo.get_edges()
+                
+                source_node = next((n for n in nodes if n.id == source_id), None)
+                target_node = next((n for n in nodes if n.id == target_id), None)
+                
+                if source_node and target_node:
+                    target_node.evidence = list(set(target_node.evidence + source_node.evidence))
+                    target_node.tags = list(set(target_node.tags + source_node.tags))
+                    if source_node.summary not in target_node.summary:
+                        target_node.summary += " | Merged from: " + source_node.summary
+                        
+                # Delete source node
+                new_nodes = [n for n in nodes if n.id != source_id]
+                
+                # Reroute edges
+                new_edges = []
+                for e in edges:
+                    if e.source == source_id:
+                        e.source = target_id
+                    if e.target == source_id:
+                        e.target = target_id
+                    
+                    if e.source != e.target:
+                        new_edges.append(e)
+                
+                # Remove duplicate edges
+                unique_edges = []
+                seen = set()
+                for e in new_edges:
+                    key = (e.source, e.target, e.type)
+                    if key not in seen:
+                        seen.add(key)
+                        unique_edges.append(e)
+                        
+                repo.save_nodes(new_nodes)
+                repo.save_edges(unique_edges)
+                
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self._send_cors_headers()
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+            else:
+                self.send_error(400, "Missing payload")
+            return
         
         self.send_error(404, "Not Found")
 

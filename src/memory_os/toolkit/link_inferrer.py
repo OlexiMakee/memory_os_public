@@ -279,11 +279,21 @@ class LinkInferrer:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         batch_size: int = 60,
+        exclude_types: Optional[Set[str]] = None,
     ) -> int:
         nodes = self._load_nodes()
         if not nodes:
             print("No nodes found in memory/nodes.jsonl")
             return 1
+
+        # Filter before any processing: skip non-indexable and excluded types
+        before = len(nodes)
+        nodes = [n for n in nodes if n.get("indexable", True)]
+        if exclude_types:
+            nodes = [n for n in nodes if n.get("type") not in exclude_types]
+        skipped = before - len(nodes)
+        if skipped:
+            print(f"Skipped {skipped} nodes (indexable=false or excluded type).")
 
         existing_pairs = self._load_existing_pairs()
         committed_pairs = set(existing_pairs)  # snapshot for final dedup filter

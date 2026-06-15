@@ -20,6 +20,8 @@
       <div style="display: flex; justify-content: space-between; align-items: center;">
         <h1 style="margin-bottom: 0;">Memory OS</h1>
         <div style="display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.2); padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+          <button id="btn-draw-edge" onclick="toggleDrawEdgeMode()" style="background: transparent; color: var(--text-muted); border: none; cursor: pointer; font-size: 12px; padding: 2px;" title="Toggle Draw Edge Mode"><i class="fa-solid fa-link"></i></button>
+          <div style="width: 1px; height: 14px; background: rgba(255,255,255,0.2);"></div>
           <i class="fa-solid fa-layer-group" style="color: var(--accent); font-size: 12px;"></i>
           <select id="space-select" class="dropdown" style="background: transparent; border: none; font-size: 12px; padding: 0; min-width: 80px; font-weight: 500;" onchange="switchSpace(this.value)">
             <option value="default">default</option>
@@ -118,8 +120,13 @@
                 #show-leaf-links-toggle:checked + .slider .slider-dot { transform: translateX(14px); }
               </style>
             </div>
+
+            <div style="margin-top: 8px;">
+              <h3 style="font-size: 11px; margin: 0 0 6px 0; color: var(--text-muted);"><i class="fa-solid fa-layer-group"></i> Node Types</h3>
+              <div id="node-type-toggles"></div>
+            </div>
           </div>
-          
+
           <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
             <h3 style="font-size: 11px; margin-top: 0; margin-bottom: 8px; color: var(--text-muted);"><i class="fa-solid fa-sparkles"></i> Particles</h3>
             
@@ -207,10 +214,16 @@
       </div>
       
       <!-- Meta badges -->
-      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+      <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px;">
         <div id="node-status-badge" class="badge" style="background: rgba(255, 255, 255, 0.05);">Status</div>
         <div id="node-trust-badge" class="badge" style="background: rgba(255, 255, 255, 0.05);">Trust</div>
         <div id="node-freshness-badge" class="badge" style="background: rgba(255, 255, 255, 0.05); text-transform: none;"><i class="fa-solid fa-calendar"></i> Date</div>
+      </div>
+      
+      <!-- HITL Actions -->
+      <div style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px;">
+        <button id="btn-verify-node" onclick="verifyCurrentNode()" style="background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; flex: 1;"><i class="fa-solid fa-lock"></i> Verify</button>
+        <button id="btn-merge-node" onclick="initiateMerge()" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; flex: 1;"><i class="fa-solid fa-code-merge"></i> Merge...</button>
       </div>
       
       <div>

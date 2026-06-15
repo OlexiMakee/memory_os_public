@@ -340,6 +340,7 @@ def cmd_compress(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 def cmd_link_infer(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     from memory_os.toolkit.link_inferrer import LinkInferrer
     inferrer = LinkInferrer(config)
+    exclude = set(t.strip() for t in (args.exclude_types or "").split(",") if t.strip())
     return inferrer.run(
         method=args.method,
         dry_run=args.dry_run,
@@ -347,6 +348,7 @@ def cmd_link_infer(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         provider=getattr(args, "provider", None),
         model=getattr(args, "model", None),
         batch_size=args.batch_size,
+        exclude_types=exclude or None,
     )
 
 def cmd_pipeline(args: argparse.Namespace, config: MemoryOSConfig) -> int:
@@ -1447,6 +1449,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=60,
         help="Number of nodes per LLM batch (default 60).",
+    )
+    link_infer_parser.add_argument(
+        "--exclude-types",
+        default="",
+        help="Comma-separated node types to skip during edge discovery (e.g. 'chat_history,draft').",
     )
     link_infer_parser.set_defaults(func=cmd_link_infer)
 

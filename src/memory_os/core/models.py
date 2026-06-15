@@ -42,6 +42,7 @@ class MemoryNode:
     protocol_level: int = 0
     related_nodes: List[str] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
+    indexable: bool = True  # if False, link-infer skips this node; still shown in visualization
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MemoryNode":
@@ -57,6 +58,7 @@ class MemoryNode:
             protocol_level=data.get("protocol_level", 0),
             related_nodes=data.get("related_nodes", []),
             tags=data.get("tags", []),
+            indexable=data.get("indexable", True),
         )
 
     def to_dict(self) -> Dict[str, Any]:
