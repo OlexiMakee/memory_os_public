@@ -18,14 +18,16 @@
     <div id="left-panel" class="glass-panel">
     <div>
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h1 style="margin-bottom: 0;">Memory OS</h1>
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <h1 style="margin-bottom: 0;">Memory OS</h1>
+          <select id="space-select" class="dropdown" style="background: rgba(0,0,0,0.2); color: #fff; border: 1px solid rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px; font-size: 12px; cursor: pointer;" onchange="switchSpace(this.value)">
+            <option value="prod" style="color: #000;">lizards_agent (prod)</option>
+            <option value="dev" style="color: #000;">lizards_agent_dev (dev)</option>
+          </select>
+        </div>
         <div style="display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.2); padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
           <button id="btn-draw-edge" onclick="toggleDrawEdgeMode()" style="background: transparent; color: var(--text-muted); border: none; cursor: pointer; font-size: 12px; padding: 2px;" title="Toggle Draw Edge Mode"><i class="fa-solid fa-link"></i></button>
           <div style="width: 1px; height: 14px; background: rgba(255,255,255,0.2);"></div>
-          <i class="fa-solid fa-layer-group" style="color: var(--accent); font-size: 12px;"></i>
-          <select id="space-select" class="dropdown" style="background: transparent; border: none; font-size: 12px; padding: 0; min-width: 80px; font-weight: 500;" onchange="switchSpace(this.value)">
-            <option value="default">default</option>
-          </select>
         </div>
       </div>
       <p class="subtitle" style="margin-top: 4px;">Interactive Knowledge Graph Visualizer</p>
@@ -63,14 +65,11 @@
     
     <div style="display: flex; flex-direction: column; flex-grow: 1; min-height: 0; padding-bottom: 20px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-        <h2 id="top-connected-title" style="cursor: pointer; margin: 0;" onclick="cycleConnectionFilter()"><i class="fa-solid fa-arrow-trend-up"></i> Top Connected</h2>
-        <div style="display: flex; gap: 6px; align-items: center;">
-          <input type="text" id="list-limit-input" value="20" style="width: 40px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); color: var(--text-main); border-radius: 4px; padding: 2px 4px; font-size: 11px; text-align: center;">
-          <button onclick="document.getElementById('list-limit-input').value = 'all'; updateStatsAndPanel();" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1); color: var(--text-main); border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer; transition: background 0.2s;">All</button>
-        </div>
+        <h2 id="top-connected-title" style="cursor: pointer; margin: 0;" onclick="cycleConnectionFilter()"><i class="fa-solid fa-list"></i> All Nodes</h2>
+        <span id="nodes-list-count" style="font-size: 11px; font-weight: 500; color: var(--text-muted); text-transform: none; letter-spacing: 0;">0 / 0</span>
       </div>
-      <div id="top-connected-list" class="list-container" style="overflow-y: auto; max-height: 35vh; padding-right: 4px;">
-        <!-- Filled dynamically -->
+      <div id="all-nodes-virtual" class="list-container" style="overflow-y: auto; max-height: 35vh; padding-right: 4px; gap: 4px;">
+        <!-- Virtual scroll — items appended on scroll -->
       </div>
     </div>
     </div>
@@ -326,6 +325,6 @@
   </div>
 
   <!-- Load our main application logic -->
-  <script src="app.js"></script>
+  <script src="/app.js?v=5"></script>
 </body>
 </html>

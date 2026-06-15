@@ -118,6 +118,7 @@ async function fetchSpaces() {
 
 window.switchSpace = async function(newSpace) {
   try {
+    localStorage.setItem('memory_os_space', newSpace);
     const res = await fetch('/api/switch_space', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -620,9 +621,7 @@ function updateStatsAndPanel() {
     typeBreakdownList.appendChild(item);
   });
 
-  const topConnectedList = document.getElementById('top-connected-list');
   const topConnectedTitle = document.getElementById('top-connected-title');
-  topConnectedList.innerHTML = '';
   
   let sortedNodes = activeNodes.map(n => ({ node: n, deg: nodeDegrees[n.id] || 0 }));
   
@@ -637,23 +636,76 @@ function updateStatsAndPanel() {
     sortedNodes = sortedNodes.sort((a,b) => b.deg - a.deg);
   }
   
-  const limitVal = document.getElementById('list-limit-input').value.toLowerCase();
-  let limit = 20;
-  if (limitVal === 'all') limit = sortedNodes.length;
-  else {
-    const parsed = parseInt(limitVal, 10);
-    if (!isNaN(parsed) && parsed > 0) limit = parsed;
+  vsInit(sortedNodes);
+}
+
+// ─── Virtual scroll: All Nodes list ────────────────────────────────
+const VSCROLL_BATCH = 20;
+let vsNodes = [];
+let vsRendered = 0;
+let vsRendering = false;
+
+function vsInit(nodesList) {
+  vsNodes = nodesList || [];
+  vsRendered = 0;
+  const container = document.getElementById('all-nodes-virtual');
+  if (container) {
+    container.innerHTML = '';
+    vsRenderBatch();
   }
-  
-  sortedNodes.slice(0, limit).forEach(item => {
-    const dotColor = colors.type[item.node.type] || '#94a3b8';
-    const div = document.createElement('div');
-    div.className = 'list-item';
-    div.onclick = () => focusOnNode(item.node);
-    div.innerHTML = `<span class="list-item-title"><span class="color-dot" style="background:${dotColor}; margin-right:6px;"></span>${item.node.id}</span><span class="list-item-value"><i class="fa-solid fa-circle-nodes" style="font-size:10px;"></i> ${item.deg}</span>`;
-    topConnectedList.appendChild(div);
+}
+
+function vsRenderBatch() {
+  if (vsRendering) return;
+  vsRendering = true;
+
+  const container = document.getElementById('all-nodes-virtual');
+  if (!container) {
+    vsRendering = false;
+    return;
+  }
+  const slice = vsNodes.slice(vsRendered, vsRendered + VSCROLL_BATCH);
+
+  requestAnimationFrame(() => {
+    const frag = document.createDocumentFragment();
+    slice.forEach(item => {
+      const dotColor = colors.type[item.node.type] || '#94a3b8';
+      const shortId = item.node.id.replace(/^notion[._]?/, '');
+      const div = document.createElement('div');
+      div.className = 'list-item compact';
+      div.title = item.node.id;
+      div.onclick = () => focusOnNode(item.node);
+      div.innerHTML =
+        '<span class="list-item-title" style="max-width:210px;">' +
+          '<span class="color-dot" style="background:' + dotColor + '; margin-right:6px; flex-shrink:0;"></span>' +
+          shortId +
+        '</span>' +
+        '<span class="list-item-value" style="font-size:10px; flex-shrink:0; margin-left:6px;">' +
+          '<i class="fa-solid fa-circle-nodes" style="font-size:9px; margin-right:3px;"></i>' + item.deg +
+        '</span>';
+      frag.appendChild(div);
+    });
+    container.appendChild(frag);
+    vsRendered += slice.length;
+    
+    const countEl = document.getElementById('nodes-list-count');
+    if (countEl) countEl.textContent = vsRendered + ' / ' + vsNodes.length;
+    
+    vsRendering = false;
   });
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+  const container = document.getElementById('all-nodes-virtual');
+  if (container) {
+    container.addEventListener('scroll', function () {
+      const remaining = this.scrollHeight - this.scrollTop - this.clientHeight;
+      if (remaining < 120 && vsRendered < vsNodes.length) {
+        vsRenderBatch();
+      }
+    });
+  }
+});
 
 function updateLegend() {
   const legendItems = document.getElementById('legend-items');
@@ -703,8 +755,6 @@ searchClearBtn.addEventListener('click', () => {
   searchInput.focus();
   applySearch('');
 });
-
-document.getElementById('list-limit-input').addEventListener('input', () => updateStatsAndPanel());
 
 document.getElementById('color-mode-select').addEventListener('change', (e) => {
   colorMode = e.target.value;
@@ -818,7 +868,14 @@ async function auditorAction(name, action) {
 }
 
 // Start everything
-initApp();
+const savedSpace = localStorage.getItem('memory_os_space');
+if (savedSpace) {
+  const selectEl = document.getElementById('space-select');
+  if (selectEl) selectEl.value = savedSpace;
+  switchSpace(savedSpace);
+} else {
+  initApp();
+}
 fetchSpaces();
 setInterval(fetchAuditors, 1000);
 fetchAuditors();
