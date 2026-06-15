@@ -121,7 +121,7 @@ class MemorySearcher:
                         other_name = other_path.stem.lower()
                         other_mod = other_path.with_suffix("").as_posix().replace("/", ".").lower()
                         if (dep_lower == other_name or 
-                            dep_lower in other_file.lower().split("/") or 
+                            dep_lower in other_path.as_posix().lower().split("/") or
                             dep_lower == other_mod or 
                             other_mod.endswith("." + dep_lower)):
                             if other_file not in visited:

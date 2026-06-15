@@ -101,7 +101,9 @@ def export_claude_skills(root_dir: Path):
     with open(target_dir / "archive_memory_node.py", "w") as f:
         f.write(ARCHIVE_NODE_SKILL)
     
-    # Make them executable
-    (target_dir / "create_memory_node.py").chmod(0o755)
-    (target_dir / "archive_memory_node.py").chmod(0o755)
+    # Make them executable (no-op on Windows, which uses file associations)
+    import sys as _sys
+    if _sys.platform != "win32":
+        (target_dir / "create_memory_node.py").chmod(0o755)
+        (target_dir / "archive_memory_node.py").chmod(0o755)
     print(f"Exported Memory OS write-skills to {target_dir}")

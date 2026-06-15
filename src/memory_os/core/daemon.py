@@ -375,6 +375,9 @@ class MemoryDaemon:
     def run(self):
         signal.signal(signal.SIGINT, self.handle_signal)
         signal.signal(signal.SIGTERM, self.handle_signal)
+        import sys as _sys
+        if _sys.platform == "win32" and hasattr(signal, "SIGBREAK"):
+            signal.signal(signal.SIGBREAK, self.handle_signal)
 
         self.write_pid()
         self.write_status()

@@ -1024,7 +1024,12 @@ def cmd_daemon(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         transcript_path = args.log_file or str(root / "agent_context" / "transcript.jsonl")
         
         command = [sys.executable, "-m", "memory_os", "--root", str(root), "_run_daemon_blocking", str(transcript_path)]
-        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        popen_kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True
+        process = subprocess.Popen(command, **popen_kwargs)
         print(f"Daemon started with PID {process.pid}. Run 'python -m memory_os monitor' to view logs.")
         return 0
         
@@ -1043,6 +1048,10 @@ def cmd_daemon(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         try:
             os.kill(pid, signal.SIGTERM)
             print(f"Sent SIGTERM to daemon (PID {pid}).")
+            if sys.platform == "win32":
+                # TerminateProcess is abrupt on Windows — finally blocks in the daemon
+                # won't run, so clean up the PID file here.
+                pid_file.unlink(missing_ok=True)
         except ProcessLookupError:
             print("Process not found, cleaning up stale PID file.")
             pid_file.unlink()
