@@ -176,6 +176,26 @@ def cmd_audit(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         print(to_markdown(report))
     return 1 if report["capsule_jsonl_errors"] or report["capsule_validation_errors"] else 0
 
+def cmd_switch_space(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    import urllib.request
+    import json
+    
+    url = f"http://127.0.0.1:{config.daemon_port}/space"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps({"space": args.target_space}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status == 200:
+                print(f"[Switched] Daemon space updated to '{args.target_space}'.")
+                return 0
+    except Exception as e:
+        print(f"Failed to switch daemon space. Is the daemon running? ({e})")
+        return 1
+
 def cmd_check_updates(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     import memory_os
     
@@ -1328,6 +1348,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--root", default=".", help="Project root")
     parser.add_argument("--config", help="Path to memory_os.config.json file")
+    parser.add_argument("--space", type=str, default="default", help="Memory space to operate on (e.g. default, user_persona)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init_parser = subparsers.add_parser("init", help="Create missing Memory OS control files.")
@@ -1609,6 +1630,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check_updates_parser.set_defaults(func=cmd_check_updates)
 
+    switch_space_parser = subparsers.add_parser(
+        "switch-space",
+        help="Switch the background daemon to a different memory space."
+    )
+    switch_space_parser.add_argument("target_space", help="Name of the space to switch to (e.g. default, user_persona)")
+    switch_space_parser.set_defaults(func=cmd_switch_space)
+
     return parser
 
 def main() -> int:
@@ -1628,7 +1656,7 @@ def main() -> int:
         # Default to current working directory if no root or config given
         config_path = str(Path.cwd() / "memory_os.config.json")
         
-    config = MemoryOSConfig(config_path)
+    config = MemoryOSConfig(config_path, space=args.space)
     return args.func(args, config)
 
 if __name__ == "__main__":

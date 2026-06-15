@@ -8,7 +8,8 @@ from memory_os.core.interfaces import IMemoryOSConfig
 class MemoryOSConfig(IMemoryOSConfig):
     """Manages the configuration and paths for Memory OS."""
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: Optional[str] = None, space: str = "default"):
+        self.space = space
         # 1. Resolve config file path: parameter -> env var -> default project root
         if config_path:
             self.config_path = Path(config_path).resolve()
@@ -53,7 +54,10 @@ class MemoryOSConfig(IMemoryOSConfig):
     @property
     def memory_dir(self) -> Path:
         val = self.data.get("memory_dir", "memory")
-        return (self.root_dir / val).resolve()
+        base = (self.root_dir / val).resolve()
+        if self.space == "default":
+            return base
+        return (base / self.space).resolve()
 
     @property
     def internal_memory_dir(self) -> Path:
@@ -65,13 +69,17 @@ class MemoryOSConfig(IMemoryOSConfig):
 
     @property
     def capsules_file(self) -> Path:
-        val = self.data.get("capsules_file", "agent_context/task_capsules.jsonl")
-        return (self.root_dir / val).resolve()
+        if self.space == "default":
+            val = self.data.get("capsules_file", "agent_context/task_capsules.jsonl")
+            return (self.root_dir / val).resolve()
+        return self.memory_dir / "task_capsules.jsonl"
 
     @property
     def snapshot_file(self) -> Path:
-        val = self.data.get("snapshot_file", "agent_context/memory_snapshot.json")
-        return (self.root_dir / val).resolve()
+        if self.space == "default":
+            val = self.data.get("snapshot_file", "agent_context/memory_snapshot.json")
+            return (self.root_dir / val).resolve()
+        return self.memory_dir / "memory_snapshot.json"
 
     @property
     def proposals_file(self) -> Path:
@@ -92,8 +100,10 @@ class MemoryOSConfig(IMemoryOSConfig):
 
     @property
     def db_path(self) -> Path:
-        val = self.data.get("db_path", "memory/memory_os.db")
-        return (self.root_dir / val).resolve()
+        if self.space == "default":
+            val = self.data.get("db_path", "memory/memory_os.db")
+            return (self.root_dir / val).resolve()
+        return self.memory_dir / "memory_os.db"
 
     @property
     def daemon_port(self) -> int:

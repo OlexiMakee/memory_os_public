@@ -89,6 +89,20 @@ class DaemonHttpHandler(http.server.BaseHTTPRequestHandler):
         elif parsed.path == "/auditors/stop":
             self.server.daemon.auditor_manager.stop_auditor(name)
             self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+        elif parsed.path == "/space":
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length > 0:
+                post_data = self.rfile.read(content_length)
+                try:
+                    payload = json.loads(post_data.decode("utf-8"))
+                    new_space = payload.get("space", "default")
+                    self.server.daemon.logger.info(f"IPC request: Switching space to '{new_space}'")
+                    self.server.daemon.switch_space(new_space)
+                    self.wfile.write(json.dumps({"status": "space_switched", "space": new_space}).encode("utf-8"))
+                except Exception as e:
+                    self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+            else:
+                self.wfile.write(json.dumps({"error": "Missing payload"}).encode("utf-8"))
         else:
             # Override 200 sent above for 404
             pass
@@ -178,12 +192,18 @@ class MemoryDaemon:
             "pid": os.getpid(),
             "last_activity_time": datetime.now().isoformat(timespec="seconds"),
             "config": {
+                "space": self.config.space,
                 "transcript_path": str(self.transcript_path),
                 "db_path": str(self.config.db_path),
                 "daemon_port": self.config.daemon_port
             }
         })
         return status_data
+
+    def switch_space(self, new_space: str):
+        self.config.space = new_space
+        self.logger.info(f"Daemon context switched to space: {new_space}")
+        self.write_status()
 
     def write_status(self, error: Optional[str] = None):
         import json

@@ -47,6 +47,28 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data).encode("utf-8"))
             return
             
+        elif path == '/api/spaces':
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self._send_cors_headers()
+            self.end_headers()
+            
+            memory_dir = self.server.provider.config.root_dir / self.server.provider.config.data.get("memory_dir", "memory")
+            spaces = []
+            if memory_dir.exists():
+                for item in memory_dir.iterdir():
+                    if item.is_dir():
+                        spaces.append(item.name)
+            if "default" not in spaces:
+                spaces.append("default")
+            
+            data = {
+                "active": self.server.provider.config.space,
+                "spaces": sorted(list(set(spaces)))
+            }
+            self.wfile.write(json.dumps(data).encode("utf-8"))
+            return
+            
         elif path == '/api/read_file':
             qs = parse_qs(parsed.query)
             file_path = qs.get('path', [''])[0]
@@ -116,6 +138,47 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         with open(target_file, 'rb') as f:
             self.wfile.write(f.read())
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        
+        if path == '/api/switch_space':
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length > 0:
+                post_data = self.rfile.read(content_length)
+                payload = json.loads(post_data.decode("utf-8"))
+                new_space = payload.get("space", "default")
+                
+                self.server.provider.config.space = new_space
+                from memory_os.core.storage import FileSystemMemoryStorage
+                from memory_os.core.repository import MemoryRepository
+                self.server.provider.repo = MemoryRepository(FileSystemMemoryStorage(), self.server.provider.config)
+                
+                import urllib.request
+                url = f"http://127.0.0.1:{self.server.provider.config.daemon_port}/space"
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps({"space": new_space}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                try:
+                    with urllib.request.urlopen(req, timeout=1):
+                        pass
+                except Exception:
+                    pass
+                    
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self._send_cors_headers()
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ok", "space": new_space}).encode("utf-8"))
+            else:
+                self.send_error(400, "Missing payload")
+            return
+        
+        self.send_error(404, "Not Found")
 
 class MemoryOSServer(HTTPServer):
     def __init__(self, server_address, RequestHandlerClass, provider):

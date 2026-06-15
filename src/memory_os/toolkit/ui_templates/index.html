@@ -17,8 +17,16 @@
     <!-- LEFT SIDEBAR -->
     <div id="left-panel" class="glass-panel">
     <div>
-      <h1>Memory OS</h1>
-      <p class="subtitle">Interactive Knowledge Graph Visualizer</p>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h1 style="margin-bottom: 0;">Memory OS</h1>
+        <div style="display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.2); padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+          <i class="fa-solid fa-layer-group" style="color: var(--accent); font-size: 12px;"></i>
+          <select id="space-select" class="dropdown" style="background: transparent; border: none; font-size: 12px; padding: 0; min-width: 80px; font-weight: 500;" onchange="switchSpace(this.value)">
+            <option value="default">default</option>
+          </select>
+        </div>
+      </div>
+      <p class="subtitle" style="margin-top: 4px;">Interactive Knowledge Graph Visualizer</p>
     </div>
     
     <div class="search-container">

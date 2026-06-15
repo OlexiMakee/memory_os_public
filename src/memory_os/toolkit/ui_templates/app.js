@@ -38,6 +38,44 @@ let searchQuery = '';
 window.connectionFilterState = 0; // 0 = Top, 1 = Lowest, 2 = Isolated
 const nodeDegrees = {};
 
+async function fetchSpaces() {
+  try {
+    const res = await fetch('/api/spaces');
+    if (res.ok) {
+      const data = await res.json();
+      const select = document.getElementById('space-select');
+      select.innerHTML = '';
+      data.spaces.forEach(sp => {
+        const opt = document.createElement('option');
+        opt.value = sp;
+        opt.innerText = sp;
+        if (sp === data.active) opt.selected = true;
+        select.appendChild(opt);
+      });
+    }
+  } catch (err) {
+    console.error('Failed to fetch spaces:', err);
+  }
+}
+
+window.switchSpace = async function(newSpace) {
+  try {
+    const res = await fetch('/api/switch_space', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ space: newSpace })
+    });
+    if (res.ok) {
+      // Reload graph
+      initApp();
+    } else {
+      console.error('Failed to switch space');
+    }
+  } catch (err) {
+    console.error('Error switching space:', err);
+  }
+};
+
 async function initApp() {
   try {
     const res = await fetch('/api/graph');
@@ -627,6 +665,7 @@ async function auditorAction(name, action) {
 
 // Start everything
 initApp();
+fetchSpaces();
 setInterval(fetchAuditors, 1000);
 fetchAuditors();
 
