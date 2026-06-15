@@ -850,7 +850,8 @@ const defaultSettings = {
   autoRotate: false,
   autoRotateSpeed: 1.0,
   showLeafLinks: false,
-  hiddenNodeTypes: []
+  hiddenNodeTypes: [],
+  bgColor: '#0b0f19'
 };
 
 const SETTINGS_KEY = 'memory_os_graph_settings';
@@ -915,10 +916,26 @@ function applySettingsToUI(s) {
     window.showLeafLinks = s.showLeafLinks;
   }
   window.hiddenNodeTypes = new Set(Array.isArray(s.hiddenNodeTypes) ? s.hiddenNodeTypes : []);
+  applyBgColor(s.bgColor || '#0b0f19');
 }
+
+function applyBgColor(color) {
+  document.documentElement.style.setProperty('--bg-main', color);
+  try { if (Graph && typeof Graph.backgroundColor === 'function') Graph.backgroundColor(color); } catch(e) {}
+  document.querySelectorAll('.bg-swatch').forEach(el => {
+    el.style.outline = (el.dataset.color === color) ? '2px solid #fff' : 'none';
+    el.style.outlineOffset = '2px';
+  });
+}
+
+window.setBgColor = function(color) {
+  saveSetting('bgColor', color);
+  applyBgColor(color);
+};
 
 function applySettingsToGraph(s) {
   if (!Graph) return;
+  try { if (typeof Graph.backgroundColor === 'function') Graph.backgroundColor(s.bgColor || '#0b0f19'); } catch(e){}
   try { if (typeof Graph.nodeResolution === 'function') Graph.nodeResolution(Number(s.nodeRes)); } catch(e){}
   try { if (typeof Graph.linkDirectionalParticles === 'function') Graph.linkDirectionalParticles(link => {
     const sId = typeof link.source === 'object' ? link.source.id : link.source;

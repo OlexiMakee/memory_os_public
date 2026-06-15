@@ -121,6 +121,17 @@
               </style>
             </div>
 
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;">
+              <span style="font-size:11px;color:var(--text-main);">Background</span>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <div class="bg-swatch" data-color="#000000" onclick="setBgColor('#000000')" title="Black"    style="width:16px;height:16px;border-radius:50%;background:#000000;cursor:pointer;border:1px solid rgba(255,255,255,0.25);"></div>
+                <div class="bg-swatch" data-color="#0b0f19" onclick="setBgColor('#0b0f19')" title="Blue"     style="width:16px;height:16px;border-radius:50%;background:#0b0f19;cursor:pointer;border:1px solid rgba(255,255,255,0.25);"></div>
+                <div class="bg-swatch" data-color="#111827" onclick="setBgColor('#111827')" title="Gray"     style="width:16px;height:16px;border-radius:50%;background:#111827;cursor:pointer;border:1px solid rgba(255,255,255,0.25);"></div>
+                <div class="bg-swatch" data-color="#1a130a" onclick="setBgColor('#1a130a')" title="Sepia"    style="width:16px;height:16px;border-radius:50%;background:#1a130a;cursor:pointer;border:1px solid rgba(255,255,255,0.25);"></div>
+                <div class="bg-swatch" data-color="#ffffff" onclick="setBgColor('#ffffff')" title="White"    style="width:16px;height:16px;border-radius:50%;background:#ffffff;cursor:pointer;border:1px solid rgba(255,255,255,0.25);"></div>
+              </div>
+            </div>
+
             <div style="margin-top: 8px;">
               <h3 style="font-size: 11px; margin: 0 0 6px 0; color: var(--text-muted);"><i class="fa-solid fa-layer-group"></i> Node Types</h3>
               <div id="node-type-toggles"></div>
