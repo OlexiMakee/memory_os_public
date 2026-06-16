@@ -333,7 +333,6 @@ def cmd_export_skills(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     return 0
 
 def cmd_compress(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    root = Path(args.root).resolve()
     compactor = MemoryCompactor(config)
     return compactor.compress_graph(provider=args.provider, model=args.model, dry_run=args.dry_run)
 
@@ -366,7 +365,6 @@ def cmd_pipeline(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     )
 
 def cmd_prune(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    root = Path(args.root).resolve()
     lifecycle = LifecycleManager(config)
     return lifecycle.prune()
 
@@ -833,7 +831,6 @@ def cmd_stats(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 
 def cmd_rag(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     import yaml
-    root = Path(args.root).resolve()
     searcher = MemorySearcher(config)
     
     results = searcher.search_memory(args.query, depth=1)
@@ -861,9 +858,6 @@ def cmd_rag(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 
 def cmd_ingest_transcript(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     from memory_os.toolkit.transcript_ingestor import TranscriptIngestor
-    from memory_os.core.config import MemoryOSConfig
-    root = Path(args.root).resolve()
-    
     ingestor = TranscriptIngestor(config)
     transcript_path = Path(args.log_file).resolve()
     print(f"Parsing transcript {transcript_path.name}...")
@@ -881,8 +875,6 @@ def cmd_compile_prompt(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 
 def cmd_persona_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     from memory_os.modules.persona import PersonaManager
-    root = Path(args.root).resolve()
-    
     pm = PersonaManager(config.persona_memory_dir)
     transcript_path = Path(args.log_file).resolve()
     
@@ -899,15 +891,11 @@ def cmd_persona_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 
 def cmd_persona(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     from memory_os.modules.persona import PersonaManager
-    root = Path(args.root).resolve()
-    
     pm = PersonaManager(config.persona_memory_dir)
     print(pm.get_persona())
     return 0
 
 def cmd_search(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    root = Path(args.root).resolve()
-    config_path = args.config or os.environ.get("MEMORY_OS_CONFIG_PATH")
     searcher = MemorySearcher(config)
 
     matches = searcher.search_memory(args.query, args.depth)
