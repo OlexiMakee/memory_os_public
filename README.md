@@ -9,14 +9,14 @@ Memory OS gives your AI agent a persistent, indexed memory graph plus repeatable
 ## Install
 
 ```bash
-pip install git+https://github.com/OlexiMakee/memory_os.git@public
+pip install git+https://github.com/OlexiMakee/memory_os_public.git
 ```
 
 Or clone and install locally:
 
 ```bash
-git clone -b public https://github.com/OlexiMakee/memory_os.git
-cd memory_os
+git clone https://github.com/OlexiMakee/memory_os_public.git
+cd memory_os_public
 pip install -e .
 ```
 

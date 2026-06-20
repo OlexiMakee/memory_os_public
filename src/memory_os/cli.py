@@ -227,7 +227,7 @@ def cmd_check_updates(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         pass
 
     print("Memory OS Upstream Configuration:")
-    print("  URL: https://github.com/OlexiMakee/memory_os/tree/public")
+    print("  URL: https://github.com/OlexiMakee/memory_os_public")
     
     if has_changes:
         print("\n[!] LOCAL MODIFICATIONS DETECTED [!]")
