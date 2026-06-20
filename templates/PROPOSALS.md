@@ -1,7 +1,8 @@
-# Upstream Proposal Protocol
+# Contribution Proposal Protocol
 
-Agents using the `public` branch are **forbidden from modifying Memory OS core engine code** directly.
-If you find a bug or need a feature, submit it as an upstream proposal.
+Use this protocol for reusable Memory OS changes: CLI behavior, core engine code, schema changes, UI behavior, templates, or toolkit workflows.
+
+Project-specific application code should stay in the downstream project. Reusable Memory OS improvements should become a focused issue, proposal, or PR against `OlexiMakee/memory_os_public`.
 
 ---
 
@@ -9,28 +10,28 @@ If you find a bug or need a feature, submit it as an upstream proposal.
 
 | Situation | Action |
 |---|---|
-| Bug in `memory_os` CLI or core engine | Propose upstream (this doc) |
-| Missing flag or CLI improvement | Propose upstream |
-| Change to `MemoryNode` / `MemoryEdge` schema | Propose upstream |
-| UI visualization improvement | Propose upstream |
+| Bug in `memory_os` CLI or core engine | Open a focused issue/PR or proposal |
+| Missing flag or CLI improvement | Open a focused issue/PR or proposal |
+| Change to `MemoryNode` / `MemoryEdge` schema | Propose first; keep backward compatibility explicit |
+| UI visualization improvement | Open a focused issue/PR or proposal |
 | Project-specific logic in your own codebase | Implement locally |
-| Workaround inside `data_provider.py` or storage layer | **Do not do this — propose the right abstraction instead** |
+| Workaround inside `data_provider.py` or storage layer | Avoid the workaround; propose the right abstraction |
 
 ---
 
-## 2. How to submit a proposal
+## 2. How to submit a change
 
 ### Step 1 — Create a branch
 
 ```bash
-git checkout -b fix/agent-proposals-YYYY-MM-DD   # for bug fixes
-git checkout -b feat/short-description            # for new features
+git checkout -b fix/short-description   # for bug fixes
+git checkout -b feat/short-description  # for new features
 ```
 
 ### Step 2 — Implement the change
 
 Follow the architecture rules in section 3 below.
-Each PR must contain only **independent, self-contained changes**.
+Each PR must contain only independent, self-contained changes.
 If two changes are unrelated, split them into separate commits with clear messages.
 
 ### Step 3 — Open a PR against `main`
@@ -45,9 +46,9 @@ PR body must include:
 - **Test plan**: concrete commands to verify each change
 - **Architecture note**: which layer this touches and why it belongs there
 
-### Step 4 — Do not merge yourself
+### Step 4 — Do not merge yourself unless you own the release decision
 
-The human maintainer reviews and merges. Do not self-approve or force-push.
+The maintainer reviews and merges. Do not self-approve or force-push over review feedback.
 
 ---
 
@@ -57,26 +58,26 @@ The human maintainer reviews and merges. Do not self-approve or force-push.
 
 All nodes and edges must flow through `MemoryRepository`.
 
-```
-✅  repo.get_nodes() → filter → present
-❌  data_provider.py reads *.jsonl files directly
-❌  UI layer globs memory directory
+```text
+OK:  repo.get_nodes() -> filter -> present
+BAD: data_provider.py reads *.jsonl files directly
+BAD: UI layer globs memory directory
 ```
 
 ### 3.2 Schema changes must be backward-compatible
 
-Any new field on `MemoryNode` or `MemoryEdge` **must have a default value**.
+Any new field on `MemoryNode` or `MemoryEdge` must have a default value.
 Existing `nodes.jsonl` files must load without migration.
 
 ```python
-# ✅ correct — existing files load with default True
+# OK: existing files load with default True
 indexable: bool = True
 
-# ❌ wrong — breaks existing files that don't have this field
-indexable: bool  # no default
+# BAD: breaks existing files that do not have this field
+indexable: bool
 ```
 
-Always update **both** `from_dict()` and the dataclass field.
+Always update both `from_dict()` and the dataclass field.
 
 ### 3.3 Use existing mechanisms before adding new ones
 
@@ -93,30 +94,30 @@ Before adding a new field or flag, check whether the existing schema already cov
 ### 3.4 Filtering belongs in the data layer, not the presentation layer
 
 ```python
-# ✅ filter once before any inference
+# OK: filter once before any inference
 nodes = [n for n in nodes if n.get("indexable", True)]
 
-# ❌ filter inside nested loops in infer_text()
+# BAD: repeated checks inside nested loops
 for a in nodes:
-    if a.get("type") in excluded:   # O(n²) checks instead of O(n)
+    if a.get("type") in excluded:
         continue
 ```
 
 ### 3.5 New CLI flags must not break existing behavior
 
-- All new arguments must have sensible defaults (existing calls work unchanged)
-- `--dry-run` style flags are always safe to add
-- Never change argument names or remove existing flags
+- All new arguments must have sensible defaults.
+- `--dry-run` style flags are safe to add.
+- Never change argument names or remove existing flags without a migration plan.
 
 ### 3.6 No hardcoded external tool names in core engine
 
-`swarm_invoke.py` and similar orchestration scripts may reference specific agent CLIs (`claude`, `agy`, `codex`). The **core engine** (`src/memory_os/`) must never do this. If you need pluggable behavior, propose an interface first (`IAgentInvoker`, `IFileLockManager`, etc.) before a concrete implementation.
+Orchestration scripts may reference specific agent CLIs (`claude`, `agy`, `codex`). The core engine (`src/memory_os/`) must not depend on a specific agent CLI. If behavior should be pluggable, propose an interface first (`IAgentInvoker`, `IFileLockManager`, etc.).
 
 ### 3.7 UI changes must not break filter/search state
 
 The graph holds two datasets:
 - `gDataFull` — complete, unfiltered data from the server
-- `gData` — filtered view (rebuilt by `applyNodeTypeFilter()`)
+- `gData` — filtered view rebuilt by `applyNodeTypeFilter()`
 
 UI changes must:
 - Never mutate `gDataFull` after initial load
@@ -127,19 +128,19 @@ UI changes must:
 
 ## 4. What makes a good proposal
 
-**High value:**
+High value:
 - A concrete downstream problem with a minimal fix
-- One logical change per PR (can be multiple files, but one concept)
-- Backward-compatible schema additions with `default` values
-- CLI flags that filter at the data layer before any LLM call (token economy)
-- UI improvements that are purely client-side (no server cost)
+- One logical change per PR
+- Backward-compatible schema additions with defaults
+- CLI flags that filter at the data layer before any LLM call
+- UI improvements that are client-side when possible
 
-**Likely to be rejected:**
-- Workarounds that bypass `MemoryRepository` (reading files directly in UI/data layer)
+Likely to be rejected:
+- Workarounds that bypass `MemoryRepository`
 - New parallel data formats (`*_nodes.jsonl`, `*_edges.jsonl`) instead of proper schema fields
-- Concrete implementations without interfaces when the behavior should be pluggable
+- Concrete implementations without interfaces when behavior should be pluggable
 - Features that duplicate lifecycle semantics already expressed by `status` / `trust` / `indexable`
-- Changes that make any core module aware of a specific downstream project or agent CLI
+- Changes that make core modules aware of a specific downstream project
 
 ---
 
@@ -147,7 +148,7 @@ UI changes must:
 
 Before opening a PR, confirm:
 
-- [ ] Change touches only one layer (data / CLI / UI — not mixed without reason)
+- [ ] Change touches only one layer unless cross-layer work is justified
 - [ ] New schema fields have default values and `from_dict()` updated
 - [ ] No direct file I/O added outside `MemoryRepository` or `FileSystemMemoryStorage`
 - [ ] No existing CLI flag signatures changed or removed

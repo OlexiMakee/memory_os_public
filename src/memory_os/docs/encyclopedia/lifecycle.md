@@ -1,6 +1,6 @@
 # Розділ 4: Скінченний автомат життєвого циклу знань
 
-Граф знань Memory OS є динамічним. Щоб запобігти накопиченню помилок та застарілих правил, у системі реалізовано скінченний автомат керування станами пам'яті через клас [LifecycleManager](file:///Users/oleksii/Documents/memory_os/src/memory_os/modules/lifecycle.py#L14).
+Граф знань Memory OS є динамічним. Щоб запобігти накопиченню помилок та застарілих правил, у системі реалізовано скінченний автомат керування станами пам'яті через клас [LifecycleManager](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/modules/lifecycle.py#L14).
 
 ---
 
@@ -32,7 +32,7 @@ stateDiagram-v2
 ## 2. Механізм верифікації доказів (Evidence Check)
 
 Під час виконання операції `transition` здійснюється автоматична перевірка доказів для всіх вузлів у стані `draft`.
-* Метод [_validate_evidence](file:///Users/oleksii/Documents/memory_os/src/memory_os/modules/lifecycle.py#L38) проходить по кожному рядку в масиві `evidence`.
+* Метод [_validate_evidence](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/modules/lifecycle.py#L38) проходить по кожному рядку в масиві `evidence`.
 * Якщо запис починається з `http`, він вважається зовнішнім посиланням і пропускається.
 * Для відносних локальних шляхів (наприклад, `src/memory_os/core/llm_service.py`) система перевіряє фізичну наявність файлу за допомогою `self.storage.exists(self.config.root_dir / item)`.
 * Якщо файл-доказ відсутній на диску, транзиція відхиляється. Вузол стає `stale`, а подія пропозиції в `events.jsonl` маркується як `rejected` із приміткою `[Rejected: missing evidence]`.
@@ -58,7 +58,7 @@ stateDiagram-v2
 
 ## 4. Очищення та архівація (Prune)
 
-Для запобігання безконтрольному росту графу та економії пам'яті LLM, застарілі дані періодично архівуються через метод [prune()](file:///Users/oleksii/Documents/memory_os/src/memory_os/modules/lifecycle.py#L224).
+Для запобігання безконтрольному росту графу та економії пам'яті LLM, застарілі дані періодично архівуються через метод [prune()](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/modules/lifecycle.py#L224).
 
 ### Етапи очищення:
 1. **Фільтрація вузлів**: Вузи зі статусами `stale` та `superseded` видаляються з файлу `nodes.jsonl` та переносяться у кінець файлу `archived_nodes.jsonl`.
