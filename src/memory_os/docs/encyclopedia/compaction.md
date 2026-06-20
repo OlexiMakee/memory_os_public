@@ -6,7 +6,7 @@
 
 ## 1. Процес ущільнення знань (Compaction)
 
-Метод [compact_capsules](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/modules/compactor.py#L115) класу [MemoryCompactor](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/modules/compactor.py#L86) реалізує покрокове вилучення знань:
+Метод [compact_capsules](file:///Users/oleksii/Documents/memory_os/src/memory_os/modules/compactor.py#L115) класу [MemoryCompactor](file:///Users/oleksii/Documents/memory_os/src/memory_os/modules/compactor.py#L86) реалізує покрокове вилучення знань:
 
 ### Крок 1: Виявлення неущільнених капсул
 Система зчитує всі капсули з файлу `agent_context/task_capsules.jsonl`. Далі вона сканує `events.jsonl` на наявність подій типу `memory.task_capsules.compacted` та збирає масив уже оброблених міток часу (`compacted_timestamps`). Капсули, чиї мітки часу відсутні в цьому масиві, визначаються як **неущільнені** (new/uncompacted).
@@ -19,7 +19,7 @@
 
 ### Крок 3: Запит до LLM (Knowledge Compactor)
 Для кожного пакета формується повідомлення, що містить список існуючих вузлів (тільки `id`, `type`, `summary` для економії токенів) та детальний опис нових неущільнених задач. 
-LLM за допомогою [SYSTEM_PROMPT](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/modules/compactor.py#L17) повертає JSON із пропозиціями нових вузлів та зв'язків.
+LLM за допомогою [SYSTEM_PROMPT](file:///Users/oleksii/Documents/memory_os/src/memory_os/modules/compactor.py#L17) повертає JSON із пропозиціями нових вузлів та зв'язків.
 
 ```json
 {
@@ -61,10 +61,10 @@ LLM за допомогою [SYSTEM_PROMPT](https://github.com/OlexiMakee/memory
 
 ## 2. Семантичне стиснення графу (Semantic Graph Compression)
 
-Коли в системі накопичується багато верифікованих вузлів, деякі правила можуть дублювати або перекривати одне одного. Метод [compress_graph](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/modules/compactor.py#L374) вирішує цю проблему:
+Коли в системі накопичується багато верифікованих вузлів, деякі правила можуть дублювати або перекривати одне одного. Метод [compress_graph](file:///Users/oleksii/Documents/memory_os/src/memory_os/modules/compactor.py#L374) вирішує цю проблему:
 
 1. Збирає всі верифіковані вузли знань (`status == 'verified'`). Якщо їх менше двух, стиснення не запускається.
-2. Передає їхній список до LLM із промптом [COMPRESSION_PROMPT](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/modules/compactor.py#L58).
+2. Передає їхній список до LLM із промптом [COMPRESSION_PROMPT](file:///Users/oleksii/Documents/memory_os/src/memory_os/modules/compactor.py#L58).
 3. LLM аналізує схожість та пропонує **новий об'єднаний вузол** (unified node) та ребра типу `overrides` від нового об'єднаного вузла до ВСІХ старих вузлів, які він заміщує.
 4. Об'єднаний вузол додається як `draft`, а ребра `overrides` записуються в `edges.jsonl`.
 5. Запуск циклу `transition()` переводить новий вузол у стан `verified`, а старі вузли автоматично маркує як `superseded`, після чого `prune()` переносить їх в архів.
@@ -73,7 +73,7 @@ LLM за допомогою [SYSTEM_PROMPT](https://github.com/OlexiMakee/memory
 
 ## 3. Архівування капсул задач (Capsule Archival)
 
-Для економії токенів розробника під час роботи агента, великі файли капсул мають очищуватися. Метод [archive_compacted_capsules](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/modules/compactor.py#L485) працює так:
+Для економії токенів розробника під час роботи агента, великі файли капсул мають очищуватися. Метод [archive_compacted_capsules](file:///Users/oleksii/Documents/memory_os/src/memory_os/modules/compactor.py#L485) працює так:
 
 * Всі вже ущільнені капсули (чиї мітки часу є в масиві подій компактізації) переносяться з `task_capsules.jsonl` до файлу `agent_context/archived_task_capsules.jsonl`.
 * Щоб зберегти плавний перехід контексту, в основному файлі `task_capsules.jsonl` залишаються всі неущільнені капсули плюс **останні 5 (`keep_recent=5`)** вже ущільнених капсул. Це дає агенту можливість бачити найновішу історію дій безпосередньо у поточному вікні роботи.

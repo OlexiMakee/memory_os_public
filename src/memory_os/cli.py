@@ -226,19 +226,23 @@ def cmd_check_updates(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
-    print("Memory OS Repository Configuration:")
-    print("  URL: https://github.com/OlexiMakee/memory_os_public")
-    print(f"  Current branch: {current_branch}")
+    print("Memory OS Upstream Configuration:")
+    print("  URL: https://github.com/OlexiMakee/memory_os/tree/public")
     
     if has_changes:
         print("\n[!] LOCAL MODIFICATIONS DETECTED [!]")
-        print("You have local changes inside the installed memory_os package.")
-        print("Before updating, commit/stash them or turn reusable fixes into a focused PR/proposal.")
+        print("You have made changes to the local memory_os core.")
+        print("Before updating, please consider proposing your features or bug-fixes")
+        print("to the public repository via a Pull Request or Agent Proposal!")
 
     print("\n[AGENT INSTRUCTION]")
-    print("Use normal GitHub flow for reusable Memory OS changes: branch, test, PR against `main`.")
-    print("For downstream project-specific behavior, implement locally instead of patching Memory OS core.")
-    print("For uncertain reusable changes, write a proposal in agent_proposals/ or open a GitHub issue first.")
+    if current_branch != "main":
+        print("DOWNSTREAM RESTRICTION: You operate STRICTLY on the `public` branch.")
+        print("You are FORBIDDEN from accessing, fetching, or interacting with the `main` branch of memory_os.")
+        
+    print("You are authorized to ONLY PROPOSE features and bug-fixes for memory_os.")
+    print("DO NOT implement them directly in the downstream code.")
+    print("Propose changes by suggesting a GitHub issue/PR to the user, or by writing a proposal file to agent_proposals/.")
     return 0
 
 def cmd_validate(args: argparse.Namespace, config: MemoryOSConfig) -> int:

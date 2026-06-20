@@ -154,7 +154,7 @@ SQLite файл бази даних за замовчуванням розташ
 
 ## 4. Контроль цілісності (`manifest.json`)
 
-Файл [manifest.json](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/memory/manifest.json) генерується автоматично під час завершення циклу обробки знань. Він містить агреговані лічильники елементів та SHA-256 хеші файлів для запобігання пошкодженню даних:
+Файл [manifest.json](file:///Users/oleksii/Documents/memory_os/src/memory_os/memory/manifest.json) генерується автоматично під час завершення циклу обробки знань. Він містить агреговані лічильники елементів та SHA-256 хеші файлів для запобігання пошкодженню даних:
 ```json
 {
   "generated_at": "2026-06-04T19:54:20Z",

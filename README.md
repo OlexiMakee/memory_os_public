@@ -1,22 +1,22 @@
 # Memory OS
 
-**Local-first long-term memory for LLM agents.**
+**Local-first development toolkit and long-term memory for LLM agents.**
 
-Memory OS gives your AI agent a persistent, indexed memory graph — so it stops forgetting everything between sessions.
+Memory OS gives your AI agent a persistent, indexed memory graph plus repeatable workflows for spec-driven planning, verification, and agent handoff quality.
 
 > *The LLM shouldn't remember everything. It should know how to ask Memory OS.*
 
 ## Install
 
 ```bash
-pip install git+https://github.com/OlexiMakee/memory_os_public.git
+pip install git+https://github.com/OlexiMakee/memory_os.git@public
 ```
 
 Or clone and install locally:
 
 ```bash
-git clone https://github.com/OlexiMakee/memory_os_public.git
-cd memory_os_public
+git clone -b public https://github.com/OlexiMakee/memory_os.git
+cd memory_os
 pip install -e .
 ```
 
@@ -46,7 +46,7 @@ memory_os triage
 |---|---|
 | `init` | Create memory files and config in current directory |
 | `validate` | Check that memory files and capsules are valid |
-| `sync` | Sync `memory/nodes.jsonl` -> SQLite FTS5 index |
+| `sync` | Sync `memory/nodes.jsonl` → SQLite FTS5 index |
 | `search <query>` | Keyword search across memory nodes |
 | `snapshot` | Build a compact memory snapshot for agent context |
 | `spec init <title>` | Create spec/plan/tasks/checklist files for a feature |
@@ -83,10 +83,10 @@ specs/001-example/
 
 ```
 agent completes task
-    -> writes task_capsules.jsonl
-    -> memory_os compact  (LLM extracts nodes)
-    -> memory_os sync     (indexes to SQLite)
-    -> memory_os search   (retrieves relevant context)
+    → writes task_capsules.jsonl
+    → memory_os compact  (LLM extracts nodes)
+    → memory_os sync     (indexes to SQLite)
+    → memory_os search   (retrieves relevant context)
 ```
 
 ## Environment variables
@@ -113,8 +113,8 @@ Run `memory_os search "<topic>"` before starting any task.
 For non-trivial feature work, run `memory_os spec init "<title>"` and keep spec/plan/tasks traceable.
 After completing a task, append a capsule to `agent_context/task_capsules.jsonl`.
 Run `memory_os sync` after any memory update.
-Run `memory_os check-updates` periodically to print the canonical repository URL and contribution guidance.
-For reusable Memory OS changes, open an issue/PR against `OlexiMakee/memory_os_public` or write a local proposal in `agent_proposals/`.
+Run `memory_os check-updates` periodically to find the upstream repository URL.
+If using the `public` version, downstream agents are FORBIDDEN from accessing the `main` branch. DO NOT modify the local package directly; instead, propose features or bug-fixes for the upstream repository.
 ```
 
 ## Templates
@@ -122,12 +122,13 @@ For reusable Memory OS changes, open an issue/PR against `OlexiMakee/memory_os_p
 Copy files from `templates/` into your project's `agent_context/`:
 
 - `templates/CONTEXT.md` — project context template
-- `templates/HANDSHAKE.md` — agent session handoff template
+- `templates/HANDSHAKE.md` — agent session handoff template  
 - `templates/WORKFLOWS.md` — 12-step task scale
 - `templates/CONSTITUTION.md` — development principles for Memory OS projects
 - `templates/specs/` — spec, plan, tasks, and checklist templates
 - `templates/SWARM_PROTOCOL.md` — multi-agent orchestration protocol
-- `templates/PROPOSALS.md` — contribution proposal protocol for reusable Memory OS changes
+- `templates/PROPOSALS.md` — how agents propose upstream changes (bugs, features, schema)
+- `templates/AGENT_RULES.md` — handshake verification and step-tier rules
 - `templates/scripts/` — LOCAL FIRST script scaffolds
 - `templates/skills/` — skill/rules templates and examples
 

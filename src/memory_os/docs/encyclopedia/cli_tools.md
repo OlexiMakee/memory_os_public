@@ -1,6 +1,6 @@
 # Розділ 7: CLI та Інструментарій розробника
 
-Memory OS постачається зі зручним та потужним CLI-інтерфейсом [cli.py](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/cli.py) та набором інструментів автоматизації. Вони дозволяють керувати базою знань, оцінювати складність завдань та проводити аудит стану проєкту безпосередньо з терміналу.
+Memory OS постачається зі зручним та потужним CLI-інтерфейсом [cli.py](file:///Users/oleksii/Documents/memory_os/src/memory_os/cli.py) та набором інструментів автоматизації. Вони дозволяють керувати базою знань, оцінювати складність завдань та проводити аудит стану проєкту безпосередньо з терміналу.
 
 ---
 
@@ -79,23 +79,23 @@ Memory OS постачається зі зручним та потужним CLI
 
 ## 2. OS Performance Analyzer (Аналізатор Швидкодії)
 
-Клас [OSPerformanceAnalyzer](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/toolkit/analyzer.py#L31) використовується для самоперевірки продуктивності ядра:
+Клас [OSPerformanceAnalyzer](file:///Users/oleksii/Documents/memory_os/src/memory_os/toolkit/analyzer.py#L31) використовується для самоперевірки продуктивності ядра:
 1. Зчитує середню тривалість викликів LLM та обробки алгоритмів із таблиць SQLite.
 2. Формує текстовий звіт про роботу системи (Digest).
-3. Надсилає його до моделі Gemini з інструкцією [ADVISOR_PROMPT](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/toolkit/analyzer.py#L11).
+3. Надсилає його до моделі Gemini з інструкцією [ADVISOR_PROMPT](file:///Users/oleksii/Documents/memory_os/src/memory_os/toolkit/analyzer.py#L11).
 4. Отримані рекомендації зберігаються у файлі `agent_proposals/admin_proposals.jsonl` зі статусом `draft` для подальшого схвалення розробником.
 
 ---
 
 ## 3. Transcript Ingestor (Зчитувач логів) та Важливе Зауваження Розробнику
 
-Клас [TranscriptIngestor](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/toolkit/transcript_ingestor.py#L37) розпізнає успішно завершені завдання з Conv-Log сесій.
+Клас [TranscriptIngestor](file:///Users/oleksii/Documents/memory_os/src/memory_os/toolkit/transcript_ingestor.py#L37) розпізнає успішно завершені завдання з Conv-Log сесій.
 
 > [!IMPORTANT]
 > **Увага розробника (Runtime Mismatch)**:
-> У поточній реалізації методу [ingest()](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/toolkit/transcript_ingestor.py#L68) присутня помилка виклику інтерфейсу LLM:
+> У поточній реалізації методу [ingest()](file:///Users/oleksii/Documents/memory_os/src/memory_os/toolkit/transcript_ingestor.py#L68) присутня помилка виклику інтерфейсу LLM:
 > * На рядку 76 використовується виклик `self.llm.generate(...)`.
-> * Проте інтерфейс [ILlmProviderService](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/core/interfaces.py#L42) та клас [DefaultLlmProviderService](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/core/llm_service.py#L69) мають виключно метод `call_llm(...)`.
+> * Проте інтерфейс [ILlmProviderService](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/interfaces.py#L42) та клас [DefaultLlmProviderService](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/llm_service.py#L69) мають виключно метод `call_llm(...)`.
 > * **Виправлення**: При кастомізації або використанні цього інструменту в коді, змініть виклик на:
 >   ```python
 >   result_text = self.llm.call_llm(
@@ -110,10 +110,10 @@ Memory OS постачається зі зручним та потужним CLI
 
 ## 4. Автоматизація Аудитора (Auditor) та Запуск Тестів
 
-Клас [auditor.py](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/toolkit/auditor.py) виконує не лише пасивний збір статистики, а й активну верифікацію пропозицій (пропозиції типу `proposal.<номер>`):
+Клас [auditor.py](file:///Users/oleksii/Documents/memory_os/src/memory_os/toolkit/auditor.py) виконує не лише пасивний збір статистики, а й активну верифікацію пропозицій (пропозиції типу `proposal.<номер>`):
 
 ### Процес автоматичної верифікації пропозицій:
-1. Метод [auto_transition_proposals()](https://github.com/OlexiMakee/memory_os_public/blob/main/src/memory_os/toolkit/auditor.py#L176) знаходить у `nodes.jsonl` верифіковані вузли, ідентифікатор яких починається з `proposal.`.
+1. Метод [auto_transition_proposals()](file:///Users/oleksii/Documents/memory_os/src/memory_os/toolkit/auditor.py#L176) знаходить у `nodes.jsonl` верифіковані вузли, ідентифікатор яких починається з `proposal.`.
 2. Система шукає відповідний запис у файлі пропозицій `agent_proposals/admin_proposals.jsonl` зі статусом `active`.
 3. З масиву `evidence` цього вузла вибираються Python файли тестів (що знаходяться в директоріях `tests/` або `scratch/`).
 4. Для кожного файлу тесту запускається ізольована команда тестування через `subprocess`:
