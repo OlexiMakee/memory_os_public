@@ -49,6 +49,9 @@ memory_os triage
 | `sync` | Sync `memory/nodes.jsonl` -> SQLite FTS5 index |
 | `search <query>` | Keyword search across memory nodes |
 | `snapshot` | Build a compact memory snapshot for agent context |
+| `spec init <title>` | Create spec/plan/tasks/checklist files for a feature |
+| `spec analyze [id]` | Validate spec quality gates and traceability |
+| `spec constitution` | Install project development principles |
 | `compact` | Extract new memory nodes from task capsules via LLM |
 | `compress` | Semantically merge duplicate memory nodes |
 | `prune` | Archive stale and superseded nodes |
@@ -65,6 +68,18 @@ memory_os triage
 Memory lives in `memory/nodes.jsonl` and `memory/edges.jsonl` — plain text files you can read and edit.
 
 Agents write **task capsules** to `agent_context/task_capsules.jsonl` when they complete work. Running `memory_os compact` extracts structured memory nodes from those capsules via LLM. Running `memory_os sync` indexes them into SQLite FTS5 for fast search.
+
+For non-trivial development work, agents can run `memory_os spec init "<title>"` to create a plain-file feature workspace:
+
+```
+specs/001-example/
+    spec.md
+    plan.md
+    tasks.md
+    checklist.md
+```
+
+`memory_os spec analyze` checks for unresolved clarification markers, numbered requirements, acceptance scenarios, constitution checks, and task traceability.
 
 ```
 agent completes task
@@ -95,6 +110,7 @@ After `memory_os init`, add this to your `AGENTS.md` or `CLAUDE.md`:
 ## Memory OS
 
 Run `memory_os search "<topic>"` before starting any task.
+For non-trivial feature work, run `memory_os spec init "<title>"` and keep spec/plan/tasks traceable.
 After completing a task, append a capsule to `agent_context/task_capsules.jsonl`.
 Run `memory_os sync` after any memory update.
 Run `memory_os check-updates` periodically to print the canonical repository URL and contribution guidance.
@@ -108,6 +124,8 @@ Copy files from `templates/` into your project's `agent_context/`:
 - `templates/CONTEXT.md` — project context template
 - `templates/HANDSHAKE.md` — agent session handoff template
 - `templates/WORKFLOWS.md` — 12-step task scale
+- `templates/CONSTITUTION.md` — development principles for Memory OS projects
+- `templates/specs/` — spec, plan, tasks, and checklist templates
 - `templates/SWARM_PROTOCOL.md` — multi-agent orchestration protocol
 - `templates/PROPOSALS.md` — contribution proposal protocol for reusable Memory OS changes
 - `templates/scripts/` — LOCAL FIRST script scaffolds

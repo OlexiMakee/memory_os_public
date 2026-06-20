@@ -53,6 +53,7 @@ DEFAULT_AGENTS_BLOCK = """\n## Memory OS Integration
 - Read `agent_context/WORKFLOWS.md` before choosing task scope.
 - Route work through `product` or `memory_os`.
 - Use the 12-step scale from `nano` to `giant`.
+- For non-trivial feature work, run `python -m memory_os spec init "<title>"` and keep spec/plan/tasks traceable.
 - Run `python -m memory_os audit` before broad Memory OS changes.
 """
 
@@ -131,6 +132,8 @@ def append_if_absent(path: Path, marker: str, content: str, actions: List[str]) 
     actions.append(f"created {path}")
 
 def cmd_init(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.toolkit.spec_workflow import CONSTITUTION_TEMPLATE
+
     root = Path(args.root).resolve()
     actions: List[str] = []
     write_if_missing(root / "agent_context" / "WORKFLOWS.md", DEFAULT_WORKFLOWS, actions)
@@ -140,10 +143,16 @@ def cmd_init(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         actions,
     )
     write_if_missing(root / "agent_context" / "development_log.md", "# Development Log\n", actions)
+    write_if_missing(
+        root / "agent_context" / "CONSTITUTION.md",
+        CONSTITUTION_TEMPLATE,
+        actions,
+    )
     write_if_missing(root / "agent_context" / "task_capsules.jsonl", "", actions)
     write_if_missing(root / "memory" / "nodes.jsonl", "", actions)
     write_if_missing(root / "memory" / "edges.jsonl", "", actions)
     write_if_missing(root / "memory" / "events.jsonl", "", actions)
+    write_if_missing(root / "specs" / ".gitkeep", "", actions)
     for filename, content in DEFAULT_WORKFLOW_TOMLS.items():
         write_if_missing(root / "workflows" / filename, content, actions)
     write_if_missing(
@@ -307,6 +316,70 @@ def cmd_workflows(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     else:
         print(to_markdown(report))
     return 0 if report["ok"] else 1
+
+def cmd_spec(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.toolkit.spec_workflow import SpecManager, report_to_markdown
+
+    manager = SpecManager(Path(args.root).resolve())
+    action = args.spec_action
+    if action == "init":
+        paths = manager.init_feature(
+            title=args.title,
+            description=args.description or "",
+            feature_id=args.id,
+            force=args.force,
+        )
+        result = paths.to_dict(manager.root)
+        if args.format == "json":
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(f"Created spec workspace: {result['root']}")
+            print(f"- spec: {result['spec']}")
+            print(f"- plan: {result['plan']}")
+            print(f"- tasks: {result['tasks']}")
+            print(f"- checklist: {result['checklist']}")
+        return 0
+
+    if action == "constitution":
+        path = manager.ensure_constitution(force=args.force)
+        if args.format == "json":
+            print(json.dumps({"path": str(path.relative_to(manager.root))}, ensure_ascii=False, indent=2))
+        else:
+            print(f"Wrote {path.relative_to(manager.root)}")
+        return 0
+
+    if action == "list":
+        features = manager.list_features()
+        if args.format == "json":
+            print(json.dumps({"features": features}, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            if not features:
+                print("No specs found.")
+            for feature in features:
+                print(f"{feature['feature_id']}\t{feature['path']}")
+        return 0
+
+    if action == "analyze":
+        try:
+            report = manager.analyze(args.feature)
+        except (FileNotFoundError, ValueError) as exc:
+            report = {
+                "ok": False,
+                "feature_id": args.feature,
+                "files": {},
+                "requirements": [],
+                "scenarios": [],
+                "tasks": [],
+                "errors": [str(exc)],
+                "warnings": [],
+            }
+        if args.format == "json":
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(report_to_markdown(report))
+        return 0 if report["ok"] else 1
+
+    raise ValueError(f"Unsupported spec action: {action}")
 
 def cmd_compact(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     from memory_os.modules.compactor import MemoryCompactor
@@ -1377,6 +1450,37 @@ def build_parser() -> argparse.ArgumentParser:
     workflows_parser.add_argument("--write-manifest", action="store_true")
     workflows_parser.add_argument("--manifest-path", default="memory/workflow_manifest.json")
     workflows_parser.set_defaults(func=cmd_workflows)
+
+    spec_parser = subparsers.add_parser(
+        "spec",
+        help="Create and validate spec-driven development artifacts.",
+    )
+    spec_subparsers = spec_parser.add_subparsers(dest="spec_action", required=True)
+
+    spec_init_parser = spec_subparsers.add_parser("init", help="Create specs/<id>/ files.")
+    spec_init_parser.add_argument("title", help="Feature or change title.")
+    spec_init_parser.add_argument("--description", default="", help="Short goal statement.")
+    spec_init_parser.add_argument("--id", help="Explicit feature id, e.g. 001-retrieval-router.")
+    spec_init_parser.add_argument("--force", action="store_true", help="Overwrite existing spec files.")
+    spec_init_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    spec_init_parser.set_defaults(func=cmd_spec)
+
+    spec_constitution_parser = spec_subparsers.add_parser(
+        "constitution",
+        help="Create agent_context/CONSTITUTION.md if missing.",
+    )
+    spec_constitution_parser.add_argument("--force", action="store_true", help="Overwrite existing constitution.")
+    spec_constitution_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    spec_constitution_parser.set_defaults(func=cmd_spec)
+
+    spec_list_parser = spec_subparsers.add_parser("list", help="List local specs.")
+    spec_list_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    spec_list_parser.set_defaults(func=cmd_spec)
+
+    spec_analyze_parser = spec_subparsers.add_parser("analyze", help="Validate spec quality gates.")
+    spec_analyze_parser.add_argument("feature", nargs="?", help="Feature id or unique prefix. Defaults to latest.")
+    spec_analyze_parser.add_argument("--format", choices={"json", "markdown"}, default="markdown")
+    spec_analyze_parser.set_defaults(func=cmd_spec)
 
     compact_parser = subparsers.add_parser(
         "compact",

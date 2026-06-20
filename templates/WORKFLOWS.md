@@ -45,6 +45,7 @@ Owns:
 Default constraints:
 - [key constraint]
 - [key constraint]
+- For non-trivial feature work, keep `spec.md`, `plan.md`, `tasks.md`, and verification evidence traceable.
 
 Typical tasks by score:
 - 1 nano: [example]
