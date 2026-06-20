@@ -53,7 +53,7 @@ The fix: build a CLI tool once, write a skill file that teaches agents to call i
 
 ### Template for a new skill script
 
-Create `media_skills/<tool_name>_skill.md` with this structure:
+Create `<project-skill-dir>/<tool_name>_skill.md` with this structure:
 
 ```markdown
 # Skill: <Tool Name>

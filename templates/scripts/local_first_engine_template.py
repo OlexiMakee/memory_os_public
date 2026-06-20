@@ -4,7 +4,7 @@ LOCAL FIRST Engine Template
 Copy this file to your project as `scripts/<domain>_engine.py` and adapt.
 
 Principle: build a CLI tool once so agents never write ad-hoc code or queries.
-Pair with a skill file at `media_skills/<domain>_engine_skill.md` (see template).
+Pair with a project skill or rules file. Start from `templates/skills/local_first_skill_template.md`; see `templates/skills/examples/analytics_engine_skill.md` for a domain-specific example.
 
 Real-world example: scripts/analytics_engine.py in news-research projects.
 
