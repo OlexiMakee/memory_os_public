@@ -32,6 +32,11 @@ adapters-mlflow = ["mlflow"]
 adapters-pydantic-ai = ["pydantic-ai"]
 adapters-mcp = ["mcp"]
 adapters-vllm = ["openai>=1.0.0"]
+adapters-autogen = ["pyautogen"]
+adapters-crewai = ["crewai"]
+adapters-llamaindex = ["llama-index"]
+adapters-semantic-kernel = ["semantic-kernel"]
+adapters-haystack = ["haystack-ai"]
 all = [
     "ollama>=0.1.0",
     "openai>=1.0.0",
@@ -48,6 +53,11 @@ all = [
     "mlflow",
     "pydantic-ai",
     "mcp",
+    "pyautogen",
+    "crewai",
+    "llama-index",
+    "semantic-kernel",
+    "haystack-ai",
 ]
 
 [build-system]

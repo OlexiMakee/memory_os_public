@@ -20,6 +20,30 @@ LINK_INFER_METHODS = {"cascade", "text", "llm", "both"}
 LINK_INFER_RESOURCE_MODES = {"quiet", "normal", "max"}
 
 
+
+def _find_federated_spaces(base_dir: Path) -> list:
+    federated = []
+    ignore_dirs = {".git", "node_modules", "venv", "venv_auto", "__pycache__", ".venv"}
+    try:
+        search_root = base_dir.parent
+        for d1 in search_root.iterdir():
+            if d1.is_dir() and d1.name not in ignore_dirs:
+                cfg = d1 / "memory_os.config.json"
+                if cfg.exists() and d1 != base_dir:
+                    federated.append(f"federated:{d1.resolve()}")
+                else:
+                    try:
+                        for d2 in d1.iterdir():
+                            if d2.is_dir() and d2.name not in ignore_dirs:
+                                cfg2 = d2 / "memory_os.config.json"
+                                if cfg2.exists() and d2 != base_dir:
+                                    federated.append(f"federated:{d2.resolve()}")
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return sorted(list(set(federated)))
+
 class UIHTTPRequestHandler(BaseHTTPRequestHandler):
     """
     Zero-dependency HTTP handler for Memory OS Visualizer.
@@ -123,8 +147,15 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
             if "default" not in spaces:
                 spaces.append("default")
             
+            # Add federated spaces
+            try:
+                federated = _find_federated_spaces(self.server.provider.config.root_dir)
+                spaces.extend(federated)
+            except Exception as e:
+                print("Federated error:", e)
+            
             data = {
-                "active": self.server.provider.config.space,
+                "active": getattr(self.server.provider, 'federated_active_space', self.server.provider.config.space),
                 "spaces": sorted(list(set(spaces)))
             }
             self.wfile.write(json.dumps(data).encode("utf-8"))
@@ -220,36 +251,61 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
                     self.send_error(400, "Missing payload")
                     return
                 new_space = payload.get("space", "default")
-                try:
-                    validate_safe_id(new_space, "space")
-                except ValueError:
-                    new_space = "default"
-
-                # Validate: non-default spaces must have an existing directory with data
-                if new_space != "default":
-                    memory_base = self.server.provider.config.root_dir / self.server.provider.config.data.get("memory_dir", "memory")
-                    space_dir = memory_base / new_space
-                    if not space_dir.exists() or not (space_dir / "nodes.jsonl").exists():
+                
+                is_federated = new_space.startswith("federated:")
+                
+                if not is_federated:
+                    try:
+                        validate_safe_id(new_space, "space")
+                    except ValueError:
                         new_space = "default"
 
-                self.server.provider.config.space = new_space
                 from memory_os.core.storage import FileSystemMemoryStorage
                 from memory_os.core.repository import MemoryRepository
-                self.server.provider.repo = MemoryRepository(FileSystemMemoryStorage(), self.server.provider.config)
+                
+                if is_federated:
+                    fed_path_str = new_space.split("federated:", 1)[1]
+                    fed_path = Path(fed_path_str)
+                    if fed_path.exists() and (fed_path / "memory_os.config.json").exists():
+                        from memory_os.core.config import MemoryOSConfig
+                        fed_config = MemoryOSConfig(fed_path)
+                        # Ensure we default to the federated instance's default space
+                        fed_config.space = "default"
+                        self.server.provider.config = fed_config
+                        self.server.provider.repo = MemoryRepository(FileSystemMemoryStorage(), fed_config)
+                        self.server.provider.federated_active_space = new_space
+                        # Note: We do NOT send a space switch to the daemon because federated is read-only for the UI
+                    else:
+                        new_space = "default"
+                        is_federated = False
+                
+                if getattr(self.server.provider, 'federated_active_space', None) and not is_federated:
+                    delattr(self.server.provider, 'federated_active_space')
+                
+                if not is_federated:
+                    # Validate: non-default spaces must have an existing directory with data
+                    if new_space != "default":
+                        memory_base = self.server.provider.config.root_dir / self.server.provider.config.data.get("memory_dir", "memory")
+                        space_dir = memory_base / new_space
+                        if not space_dir.exists() or not (space_dir / "nodes.jsonl").exists():
+                            new_space = "default"
 
-                import urllib.request
-                url = f"http://127.0.0.1:{self.server.provider.config.daemon_port}/space"
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps({"space": new_space}).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST"
-                )
-                try:
-                    with urllib.request.urlopen(req, timeout=1):
+                    self.server.provider.config.space = new_space
+                    self.server.provider.repo = MemoryRepository(FileSystemMemoryStorage(), self.server.provider.config)
+
+                    import urllib.request
+                    url = f"http://127.0.0.1:{self.server.provider.config.daemon_port}/space"
+                    req = urllib.request.Request(
+                        url,
+                        data=json.dumps({"space": new_space}).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST"
+                    )
+                    try:
+                        with urllib.request.urlopen(req, timeout=1):
+                            pass
+                    except Exception:
                         pass
-                except Exception:
-                    pass
 
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -259,6 +315,9 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
                 return
 
             elif path == '/api/nodes/verify':
+                if getattr(self.server.provider.config, 'is_federated_ui_mode', False) or getattr(self.server.provider, 'is_federated', False) or (self.server.provider.config.root_dir != Path.cwd().resolve() and str(self.server.provider.config.root_dir) not in str(Path.cwd().resolve())):
+                    self.send_error(403, 'Read-only in federated mode')
+                    return
                 payload = self._read_json_body()
                 if not payload:
                     self.send_error(400, "Missing payload")
@@ -281,6 +340,9 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
                 return
 
             elif path == '/api/edges/create':
+                if getattr(self.server.provider.config, 'is_federated_ui_mode', False) or getattr(self.server.provider, 'is_federated', False) or (self.server.provider.config.root_dir != Path.cwd().resolve() and str(self.server.provider.config.root_dir) not in str(Path.cwd().resolve())):
+                    self.send_error(403, 'Read-only in federated mode')
+                    return
                 payload = self._read_json_body()
                 if not payload:
                     self.send_error(400, "Missing payload")
@@ -304,6 +366,9 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
                 return
 
             elif path == '/api/nodes/merge':
+                if getattr(self.server.provider.config, 'is_federated_ui_mode', False) or getattr(self.server.provider, 'is_federated', False) or (self.server.provider.config.root_dir != Path.cwd().resolve() and str(self.server.provider.config.root_dir) not in str(Path.cwd().resolve())):
+                    self.send_error(403, 'Read-only in federated mode')
+                    return
                 payload = self._read_json_body()
                 if not payload:
                     self.send_error(400, "Missing payload")
