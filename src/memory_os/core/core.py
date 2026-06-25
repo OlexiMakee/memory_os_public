@@ -149,7 +149,9 @@ class MemoryOS:
                     trust TEXT,
                     tags TEXT,
                     valid_from TEXT DEFAULT (datetime('now', 'localtime')),
-                    valid_to TEXT
+                    valid_to TEXT,
+                    access_count INTEGER DEFAULT 0,
+                    last_accessed TEXT DEFAULT ''
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(type)")
@@ -346,3 +348,21 @@ class MemoryOS:
             target=edge.target,
             edge_type=edge.type
         )
+
+    def log_node_access(self, node_ids: List[str]) -> None:
+        """Increment access_count and update last_accessed for the given nodes."""
+        if not node_ids:
+            return
+            
+        conn = self.get_connection()
+        try:
+            placeholders = ",".join(["?"] * len(node_ids))
+            conn.execute(f"""
+                UPDATE graph_nodes 
+                SET access_count = access_count + 1,
+                    last_accessed = CURRENT_TIMESTAMP
+                WHERE id IN ({placeholders})
+            """, node_ids)
+            conn.commit()
+        finally:
+            conn.close()

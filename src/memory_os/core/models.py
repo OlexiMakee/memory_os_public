@@ -47,6 +47,8 @@ class MemoryNode:
     indexable: bool = True  # if False, link-infer skips this node; still shown in visualization
     valid_from: str = ""
     valid_until: str = ""
+    access_count: int = 0
+    last_accessed: str = ""
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MemoryNode":

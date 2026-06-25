@@ -23,6 +23,13 @@ class MemoryRepository:
     def _get_edges_path(self):
         return self.config.memory_dir / "edges.jsonl"
 
+    def get_version_hash(self) -> str:
+        """Returns a fast string representing the current state version to invalidate caches."""
+        import os
+        nodes_path = self._get_nodes_path()
+        mtime = os.path.getmtime(nodes_path) if nodes_path.exists() else 0.0
+        return f"v_{mtime}"
+
     def _get_capsules_path(self):
         return self.config.capsules_file
 

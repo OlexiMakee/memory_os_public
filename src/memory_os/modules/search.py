@@ -18,6 +18,8 @@ class MemorySearcher:
         storage = FileSystemMemoryStorage()
         self.storage = storage
         self.repository = repository or MemoryRepository(storage, self.config)
+        self._query_cache = {}
+        self._cache_version = ""
 
     def _load_nodes(self) -> List[Dict[str, Any]]:
         main_nodes = self.storage.load_jsonl(self.config.memory_dir / "nodes.jsonl")
@@ -138,6 +140,15 @@ class MemorySearcher:
         return visited
 
     def search_memory(self, query: str, depth: int = 1) -> List[Dict[str, Any]]:
+        current_version = getattr(self.repository, "get_version_hash", lambda: "")()
+        if current_version and current_version != self._cache_version:
+            self._query_cache.clear()
+            self._cache_version = current_version
+            
+        cache_key = (query, depth)
+        if cache_key in self._query_cache:
+            return self._query_cache[cache_key]
+            
         nodes = self._load_nodes()
         edges = self._load_edges()
         snapshot = self._load_snapshot()
@@ -174,10 +185,12 @@ class MemorySearcher:
             for res in sqlite_results:
                 nid = res["id"]
                 matched_node_ids.add(nid)
-                # Ensure stale/superseded are downranked
+                # Ensure stale/superseded/archived are downranked
                 score = res.get("search_score", 1.0)
                 if res.get("status") in ["stale", "superseded"]:
                     score *= 0.5
+                elif res.get("status") == "archived":
+                    score *= 0.1
                 node_scores[nid] = score
         else:
             # Fallback to pure Python fuzzy array scan
@@ -208,6 +221,8 @@ class MemorySearcher:
                 if score >= 1.5:
                     if node.get("status") in ["stale", "superseded"]:
                         score *= 0.5
+                    elif node.get("status") == "archived":
+                        score *= 0.1
                     matched_node_ids.add(node_id)
                     node_scores[node_id] = score
 
@@ -303,4 +318,12 @@ class MemorySearcher:
         for f in lexical_files - traversed_files - exact_files - blast_files:
             results_code.append(to_node_shape(f, 3, "lexical"))
 
-        return matched_nodes + results_code
+        final_results = matched_nodes + results_code
+        self._query_cache[cache_key] = final_results
+        
+        if self.repository and self.repository.indexer:
+            matched_ids = [n["id"] for n in matched_nodes if "id" in n]
+            if matched_ids:
+                getattr(self.repository.indexer, "log_node_access", lambda x: None)(matched_ids)
+                
+        return final_results

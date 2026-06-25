@@ -315,3 +315,46 @@ class LifecycleManager:
 
         logger.info(f"INFO: Pruning finished. Archived {pruned_count} nodes and {len(archived_edges_list)} edges. Removed {pruned_edges_count - len(archived_edges_list)} invalid edges.")
         return 0
+
+    def decay_nodes(self, days_stale: int = 30) -> int:
+        """
+        Algorithmic forgetting (Ebbinghaus curve approximation).
+        Transitions nodes that haven't been accessed recently AND are older than `days_stale` to `archived` status.
+        """
+        from memory_os.core.core import MemoryOS
+        from memory_os.core.patch import RelationPatchStore, RelationPatch
+        
+        db = MemoryOS(self.config)
+        conn = db.get_connection()
+        archived_count = 0
+        try:
+            # We select nodes that are 'active' or 'verified' but haven't been accessed recently 
+            # (or ever, if last_accessed is empty) and whose valid_from is older than days_stale
+            cursor = conn.execute(f"""
+                SELECT id FROM graph_nodes
+                WHERE status IN ('active', 'verified', 'pending')
+                  AND (last_accessed = '' OR last_accessed < datetime('now', '-{days_stale} days'))
+                  AND valid_from < datetime('now', '-{days_stale} days')
+            """)
+            stale_ids = [row[0] for row in cursor.fetchall()]
+            
+            if not stale_ids:
+                return 0
+                
+            patch_store = RelationPatchStore(self.repository)
+            for nid in stale_ids:
+                patch = RelationPatch(
+                    initiator="LifecycleManager.decay_nodes",
+                    rationale=f"Algorithmic memory decay: Node not accessed in >{days_stale} days.",
+                    upsert_nodes=[],
+                    upsert_edges=[],
+                    status_overrides={nid: "archived"},
+                    protocol_level=0
+                )
+                patch_store.propose(patch)
+                patch_store.apply(patch.id)
+                archived_count += 1
+                
+            return archived_count
+        finally:
+            conn.close()
