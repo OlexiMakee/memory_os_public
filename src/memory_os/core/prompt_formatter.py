@@ -89,3 +89,28 @@ def strip_whitespace_noise(text: str) -> str:
     # Replace 3 or more newlines with exactly 2 newlines
     cleaned = re.sub(r"\n{3,}", "\n\n", joined)
     return cleaned.strip()
+
+def format_memory_tier_status(current_ram_items: int, max_ram_items: int = 20) -> str:
+    """
+    Injects a system prompt payload informing the agent of its current Memory OS RAM usage.
+    Gives the agent OS-level memory management awareness to prevent context bloat.
+    """
+    status_lines = [
+        f"RAM Usage: {current_ram_items} / {max_ram_items} items."
+    ]
+    
+    if current_ram_items >= max_ram_items * 0.8:
+        status_lines.append(
+            "WARNING: Close to capacity. You MUST explicitly use your tool `page_out_to_disk` "
+            "(deprecate/upsert) to free up context space or you will lose information."
+        )
+    elif current_ram_items >= max_ram_items:
+        status_lines.append(
+            "CRITICAL: RAM Overload. Page out immediately to Disk."
+        )
+    else:
+        status_lines.append(
+            "RAM state healthy. You have space for more context."
+        )
+        
+    return wrap_in_xml("memory_tier_status", "\n".join(status_lines))

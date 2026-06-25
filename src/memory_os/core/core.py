@@ -256,6 +256,46 @@ class MemoryOS:
         finally:
             conn.close()
 
+    def search_graph_nodes(self, query: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Full-text search across graph_nodes using FTS5."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            # FTS5 matches using BM25 rank. 
+            cursor.execute("""
+                SELECT g.id, g.type, g.summary, g.status, g.freshness, g.trust, g.tags, g.valid_from, g.valid_to, fts.rank
+                FROM graph_nodes_fts fts
+                JOIN graph_nodes g ON g.rowid = fts.rowid
+                WHERE graph_nodes_fts MATCH ?
+                ORDER BY fts.rank ASC
+                LIMIT ?
+            """, (query, limit))
+            
+            results = []
+            for row in cursor.fetchall():
+                node_dict = dict(row)
+                # Parse tags back into a list if present
+                tags_str = node_dict.get('tags')
+                if tags_str:
+                    node_dict['tags'] = [t.strip() for t in tags_str.split(',') if t.strip()]
+                else:
+                    node_dict['tags'] = []
+                
+                # FTS5 rank is highly negative (e.g. -3.5, -0.4). Convert to a positive score so higher is better
+                # Lower rank = better match in FTS5
+                rank_val = node_dict.pop('rank', 0.0)
+                node_dict['search_score'] = abs(rank_val) if rank_val < 0 else 1.0 / (rank_val + 1.0)
+                
+                results.append(node_dict)
+            return results
+        except sqlite3.OperationalError as e:
+            # Handle empty index or bad query gracefully
+            if "fts5" in str(e).lower() or "syntax error" in str(e).lower():
+                return []
+            raise
+        finally:
+            conn.close()
+
     def insert_graph_node(self, node_id: str, node_type: str, summary: str, status: Optional[str] = None, freshness: Optional[str] = None, trust: Optional[str] = None, tags: Optional[str] = None) -> None:
         """Insert or update a node in the graph index."""
         conn = self.get_connection()

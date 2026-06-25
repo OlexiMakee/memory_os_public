@@ -150,40 +150,66 @@ class MemorySearcher:
         
         query_tokens = tokenize(query)
 
-        # 1. Search memory nodes — a single schema-invalid record (missing a
-        # required field) must not crash search for the whole graph.
+        # 1. Search memory nodes
         nodes_by_id = {node["id"]: node for node in nodes if node.get("id")}
         matched_node_ids = set()
         node_scores = {}
         
-        for node in nodes:
-            node_id = node.get("id")
-            if not node_id:
-                continue
-            
-            score = 0.0
-            text_fields = [
-                str(node_id),
-                str(node.get("summary", "")),
-                str(node.get("type", "")),
-                " ".join(str(ev) for ev in node.get("evidence", []) or []),
-                " ".join(str(tag) for tag in node.get("tags", []) or [])
-            ]
-            full_text = " ".join(text_fields).lower()
-            
-            if query_lower in full_text:
-                score += 10.0
-                
-            if query_tokens:
-                node_tokens = tokenize(full_text)
-                overlap = query_tokens.intersection(node_tokens)
-                score += (len(overlap) / len(query_tokens)) * 5.0
-                
-            if score >= 1.5:
-                if node.get("status") in ["stale", "superseded"]:
+        sqlite_results = []
+        if getattr(self.repository, "indexer", None) and hasattr(self.repository.indexer, "search_graph_nodes"):
+            # Use Layered Retrieval via SQLite FTS5 (Phase 5)
+            # Remove characters that FTS5 considers syntax (e.g. quotes, brackets)
+            safe_query = re.sub(r'[^\w\s]', ' ', query).strip()
+            if safe_query:
+                # FTS5 needs asterisk for prefix matching on the last word for better semantic feel
+                fts_query = " ".join([w for w in safe_query.split()])
+                if fts_query:
+                    # Append * to the last term for prefix matching if it doesn't end with a space
+                    if not query.endswith(' '):
+                        fts_query += '*'
+                    sqlite_results = self.repository.indexer.search_graph_nodes(fts_query, limit=100)
+        
+        if sqlite_results:
+            # We got fast indexed results from SQLite!
+            for res in sqlite_results:
+                nid = res["id"]
+                matched_node_ids.add(nid)
+                # Ensure stale/superseded are downranked
+                score = res.get("search_score", 1.0)
+                if res.get("status") in ["stale", "superseded"]:
                     score *= 0.5
-                matched_node_ids.add(node_id)
-                node_scores[node_id] = score
+                node_scores[nid] = score
+        else:
+            # Fallback to pure Python fuzzy array scan
+            for node in nodes:
+                node_id = node.get("id")
+                if not node_id:
+                    continue
+                
+                score = 0.0
+                text_fields = [
+                    str(node_id),
+                    str(node.get("summary", "")),
+                    str(node.get("type", "")),
+                    " ".join(str(ev) for ev in node.get("evidence", []) or []),
+                    " ".join(str(tag) for tag in node.get("tags", []) or [])
+                ]
+                full_text = " ".join(text_fields).lower()
+                
+                if query_lower in full_text:
+                    score += 10.0
+                    
+                if query_tokens:
+                    node_tokens = tokenize(full_text)
+                    overlap = query_tokens.intersection(node_tokens)
+                    if len(query_tokens) > 0:
+                        score += (len(overlap) / len(query_tokens)) * 5.0
+                    
+                if score >= 1.5:
+                    if node.get("status") in ["stale", "superseded"]:
+                        score *= 0.5
+                    matched_node_ids.add(node_id)
+                    node_scores[node_id] = score
 
         all_matched_node_ids = self.traverse_graph(matched_node_ids, depth, nodes_by_id, edges)
         matched_nodes = []
