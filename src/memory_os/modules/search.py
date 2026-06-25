@@ -144,23 +144,57 @@ class MemorySearcher:
 
         query_lower = query.strip().lower()
 
+        import re
+        def tokenize(text: str) -> set:
+            return {w for w in re.split(r'\W+', text.lower()) if len(w) > 2}
+        
+        query_tokens = tokenize(query)
+
         # 1. Search memory nodes — a single schema-invalid record (missing a
         # required field) must not crash search for the whole graph.
         nodes_by_id = {node["id"]: node for node in nodes if node.get("id")}
         matched_node_ids = set()
+        node_scores = {}
+        
         for node in nodes:
             node_id = node.get("id")
             if not node_id:
                 continue
-            if (query_lower in str(node_id).lower() or
-                query_lower in str(node.get("summary", "")).lower() or
-                any(query_lower in str(ev).lower() for ev in node.get("evidence", []) or []) or
-                query_lower in str(node.get("type", "")).lower() or
-                any(query_lower in str(tag).lower() for tag in node.get("tags", []) or [])):
+            
+            score = 0.0
+            text_fields = [
+                str(node_id),
+                str(node.get("summary", "")),
+                str(node.get("type", "")),
+                " ".join(str(ev) for ev in node.get("evidence", []) or []),
+                " ".join(str(tag) for tag in node.get("tags", []) or [])
+            ]
+            full_text = " ".join(text_fields).lower()
+            
+            if query_lower in full_text:
+                score += 10.0
+                
+            if query_tokens:
+                node_tokens = tokenize(full_text)
+                overlap = query_tokens.intersection(node_tokens)
+                score += (len(overlap) / len(query_tokens)) * 5.0
+                
+            if score >= 1.5:
+                if node.get("status") in ["stale", "superseded"]:
+                    score *= 0.5
                 matched_node_ids.add(node_id)
+                node_scores[node_id] = score
 
         all_matched_node_ids = self.traverse_graph(matched_node_ids, depth, nodes_by_id, edges)
-        matched_nodes = [nodes_by_id[nid] for nid in all_matched_node_ids if nid in nodes_by_id]
+        matched_nodes = []
+        for nid in all_matched_node_ids:
+            if nid in nodes_by_id:
+                n = nodes_by_id[nid]
+                n["search_score"] = node_scores.get(nid, 0.5)
+                matched_nodes.append(n)
+        
+        # Sort matched nodes by score descending
+        matched_nodes.sort(key=lambda x: x.get("search_score", 0.0), reverse=True)
 
         # 2. Search codebase items
         items = snapshot.get("items", [])

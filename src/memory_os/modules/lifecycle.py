@@ -124,14 +124,17 @@ class LifecycleManager:
                     logger.info(f"INFO: Transitioning node '{node['id']}' to verified.")
                     node["status"] = "verified"
                     node["trust"] = "verified"
-                    node["freshness"] = datetime.now().isoformat(timespec="seconds")
+                    now_str = datetime.now().isoformat(timespec="seconds")
+                    node["freshness"] = now_str
+                    if "valid_from" not in node or not node["valid_from"]:
+                        node["valid_from"] = now_str
                     verified_ids.add(node["id"])
                     for ev in events:
                         if ev.get("node_id") == node["id"] and ev.get("event") == "memory.node.proposed" and ev.get("status") == "pending":
                             ev["status"] = "accepted"
 
                     verification_event = {
-                        "timestamp": datetime.now().isoformat(timespec="seconds"),
+                        "timestamp": now_str,
                         "event": "memory.node.verified",
                         "node_id": node["id"],
                         "claim": f"Verified node: {node['summary']}",
@@ -165,10 +168,12 @@ class LifecycleManager:
                             new_status = "superseded" if edge["type"] == "overrides" else "stale"
                             logger.info(f"INFO: Node '{target_id}' is deprecating to '{new_status}' due to edge '{edge['type']}' from '{source_id}'.")
                             n["status"] = new_status
-                            n["freshness"] = datetime.now().isoformat(timespec="seconds")
+                            now_str = datetime.now().isoformat(timespec="seconds")
+                            n["freshness"] = now_str
+                            n["valid_until"] = now_str
 
                             dep_event = {
-                                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                                "timestamp": now_str,
                                 "event": "memory.node.deprecated",
                                 "node_id": target_id,
                                 "claim": f"Deprecated to {new_status} via edge {edge['type']} from {source_id}",

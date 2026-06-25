@@ -45,6 +45,8 @@ class MemoryNode:
     related_nodes: List[str] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
     indexable: bool = True  # if False, link-infer skips this node; still shown in visualization
+    valid_from: str = ""
+    valid_until: str = ""
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MemoryNode":
@@ -61,6 +63,8 @@ class MemoryNode:
             related_nodes=data.get("related_nodes", []),
             tags=data.get("tags", []),
             indexable=data.get("indexable", True),
+            valid_from=data.get("valid_from", ""),
+            valid_until=data.get("valid_until", ""),
         )
 
     def to_dict(self) -> Dict[str, Any]:

@@ -141,6 +141,7 @@ class RelationPatchStore:
             )
             self.repository._add_edge(edge)
         elif patch.operation == "upsert_node":
+            from datetime import datetime
             node = MemoryNode(
                 id=patch.target,  # for node patches, target carries the node ID
                 type=patch.type,
@@ -148,6 +149,7 @@ class RelationPatchStore:
                 evidence=patch.evidence,
                 domain=patch.domain,
                 trust="verified" if patch.confidence > 0.8 else "unverified",
+                valid_from=datetime.utcnow().isoformat() + "Z"
             )
             self.repository._add_node(node)
         elif patch.operation == "delete_edge_soft":
@@ -158,10 +160,12 @@ class RelationPatchStore:
             ]
             self.repository._save_edges(new_edges)
         elif patch.operation == "deprecate_node":
+            from datetime import datetime
             nodes = self.repository.get_nodes()
             for node in nodes:
                 if node.id == patch.target:
                     node.status = "stale"
+                    node.valid_until = datetime.utcnow().isoformat() + "Z"
             self.repository._save_nodes(nodes)
 
         patch.status = "applied"
