@@ -9,16 +9,28 @@ class MemoryOS:
     """Core orchestrator for Memory OS. Handles DB initialization and connection management."""
 
     def __init__(self, config: Optional[IMemoryOSConfig] = None, db_path: Optional[str] = None):
+        explicit_config = config is not None
         if config is None:
             # We delay import to avoid circular dependencies
             from memory_os.core.config import MemoryOSConfig
             config = MemoryOSConfig()
-            
+
         if db_path is None:
             self.db_path = config.db_path
+        elif explicit_config:
+            # An explicit db_path alongside an explicit config must still
+            # resolve under config.root_dir — otherwise this constructor
+            # reintroduces the exact path escape MemoryOSConfig.db_path's
+            # confine_to_root() already rejects for the normal config-driven
+            # path. With no config passed at all there's no established
+            # root the caller is escaping, so a standalone db_path (used by
+            # tests/utilities that want a throwaway DB unrelated to any
+            # project) is left unconfined.
+            from memory_os.core.safe_id import confine_to_root
+            self.db_path = confine_to_root(db_path, config.root_dir)
         else:
             self.db_path = Path(db_path)
-            
+
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.init_db()
 
@@ -60,7 +72,7 @@ class MemoryOS:
                     latency_ms INTEGER DEFAULT 0,
                     cost REAL DEFAULT 0.0,
                     status TEXT NOT NULL,
-                    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+                    created_at TEXT DEFAULT (datetime('now'))
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_name_ver ON memory_os_telemetry(prompt_name, prompt_version)")
@@ -120,10 +132,11 @@ class MemoryOS:
                     algorithm_name TEXT NOT NULL,
                     duration_ms INTEGER NOT NULL,
                     metadata TEXT,
-                    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+                    created_at TEXT DEFAULT (datetime('now'))
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_performance_name ON memory_os_performance(algorithm_name)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_performance_created ON memory_os_performance(created_at)")
             
             # Graph Nodes
             conn.execute("""

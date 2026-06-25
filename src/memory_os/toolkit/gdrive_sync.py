@@ -32,7 +32,7 @@ def query_gdrive_files(access_token: str, folder_id: str, page_token: str = None
     
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8")
@@ -53,7 +53,14 @@ def download_gdrive_file_content(access_token: str, file_id: str, mime_type: str
         
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            content_length = response.headers.get("Content-Length")
+            if content_length:
+                try:
+                    if int(content_length) > 10 * 1024 * 1024:
+                        return "[File size exceeds sync limit]"
+                except ValueError:
+                    pass
             content_bytes = response.read()
             try:
                 return content_bytes.decode("utf-8")

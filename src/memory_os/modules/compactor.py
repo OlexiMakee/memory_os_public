@@ -186,6 +186,53 @@ class MemoryCompactor:
             logger.info(f"CriticPanel: {len(surviving)} survived, {len(rejected_ids)} rejected by majority: {rejected_ids}")
         return surviving, all_votes
 
+    def _record_planned_deprecations(self, validator_name: str) -> None:
+        nodes_path = self.config.memory_dir / "nodes.jsonl"
+        edges_path = self.config.memory_dir / "edges.jsonl"
+        events_path = self.config.memory_dir / "events.jsonl"
+
+        if not self.storage.exists(nodes_path) or not self.storage.exists(edges_path):
+            return
+
+        nodes = self._load_jsonl(nodes_path)
+        edges = self._load_jsonl(edges_path)
+
+        pre_verified_ids = {n["id"] for n in nodes if n.get("status") == "verified"}
+
+        from memory_os.modules.lifecycle import LifecycleManager
+        lifecycle = LifecycleManager(self.config)
+
+        verified_ids = set()
+        for node in nodes:
+            if node.get("status") in ["draft", "observed"]:
+                if (node.get("id") and node.get("summary") and
+                    node.get("type") in ["rule", "fact", "variable", "connector", "config", "policy", "module_cluster"] and
+                    lifecycle._validate_evidence(node.get("evidence", []))):
+                    verified_ids.add(node["id"])
+
+        all_verified_ids = pre_verified_ids | verified_ids
+
+        for edge in edges:
+            if edge.get("type") in ["overrides", "refutes"]:
+                source_id = edge.get("source")
+                target_id = edge.get("target")
+
+                if source_id in all_verified_ids:
+                    for n in nodes:
+                        if n.get("id") == target_id and n.get("status") not in ["stale", "superseded"]:
+                            new_status = "superseded" if edge["type"] == "overrides" else "stale"
+                            dep_event = {
+                                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                                "event": "memory.node.deprecation_planned",
+                                "node_id": target_id,
+                                "claim": f"Planned deprecation to {new_status} via edge {edge['type']} from {source_id} (recorded by compactor)",
+                                "evidence": n.get("evidence", []),
+                                "validator": validator_name,
+                                "status": "accepted"
+                            }
+                            self._append_jsonl(events_path, dep_event)
+                            logger.info(f"Audit log: Node '{target_id}' is planned for deprecation to '{new_status}' due to edge '{edge['type']}' from '{source_id}'.")
+
     def _process_single_batch(self, args: tuple) -> Dict[str, Any]:
         """LLM call + 3-critic vote for one batch. No file I/O — returns pure data."""
         batch, batch_num, total_batches, existing_node_info, provider, model = args
@@ -219,34 +266,46 @@ class MemoryCompactor:
         except json.JSONDecodeError as exc:
             return {"batch_num": batch_num, "error": f"Invalid JSON: {exc}", "proposed_nodes": [], "proposed_edges": [], "timestamps": [], "critic_votes": []}
 
-        proposed_nodes: List[Dict[str, Any]] = []
-        proposed_edges: List[Dict[str, Any]] = []
+        try:
+            proposed_nodes: List[Dict[str, Any]] = []
+            proposed_edges: List[Dict[str, Any]] = []
 
-        if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict) and ("nodes" in payload[0] or "edges" in payload[0]):
-            payload = payload[0]
+            if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict) and ("nodes" in payload[0] or "edges" in payload[0]):
+                payload = payload[0]
 
-        if isinstance(payload, dict):
-            proposed_nodes = payload.get("nodes", [])
-            proposed_edges = payload.get("edges", [])
-        elif isinstance(payload, list):
-            for item in payload:
-                if isinstance(item, dict):
-                    if "source" in item and "target" in item:
-                        proposed_edges.append(item)
-                    else:
-                        proposed_nodes.append(item)
+            if isinstance(payload, dict):
+                proposed_nodes = payload.get("nodes", [])
+                proposed_edges = payload.get("edges", [])
+            elif isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict):
+                        if "source" in item and "target" in item:
+                            proposed_edges.append(item)
+                        else:
+                            proposed_nodes.append(item)
 
-        # 3-critic panel — runs 3 parallel LLM critics, requires 2/3 approval
-        surviving_nodes, critic_votes = self._panel_vote(proposed_nodes, provider, model)
+            # An LLM-returned shape can pass JSON parsing but still have the
+            # wrong inner shape (e.g. {"nodes": ["bad"], ...} — strings, not
+            # dicts). _panel_vote() assumes each node is a dict; without this
+            # filter one malformed batch raises out of execute_parallel and
+            # (per its own fix in scheduler.py) would otherwise drop every
+            # other already-completed batch's results too.
+            proposed_nodes = [n for n in proposed_nodes if isinstance(n, dict)]
+            proposed_edges = [e for e in proposed_edges if isinstance(e, dict)]
 
-        return {
-            "batch_num": batch_num,
-            "error": None,
-            "proposed_nodes": surviving_nodes,
-            "proposed_edges": proposed_edges,
-            "timestamps": [cap.get("timestamp") for cap in batch],
-            "critic_votes": critic_votes,
-        }
+            # 3-critic panel — runs 3 parallel LLM critics, requires 2/3 approval
+            surviving_nodes, critic_votes = self._panel_vote(proposed_nodes, provider, model)
+
+            return {
+                "batch_num": batch_num,
+                "error": None,
+                "proposed_nodes": surviving_nodes,
+                "proposed_edges": proposed_edges,
+                "timestamps": [cap.get("timestamp") for cap in batch],
+                "critic_votes": critic_votes,
+            }
+        except Exception as exc:
+            return {"batch_num": batch_num, "error": f"batch processing failed: {exc}", "proposed_nodes": [], "proposed_edges": [], "timestamps": [], "critic_votes": []}
 
     def compact_capsules(self, provider: Optional[str] = None, model: Optional[str] = None) -> int:
         task_capsules_path = self.config.capsules_file
@@ -296,7 +355,7 @@ class MemoryCompactor:
         # --- Parallel: LLM calls + 3-critic votes across all batches ---
         scheduler = HardwareScheduler(mode=mode)
         results: List[Dict[str, Any]] = scheduler.execute_parallel(self._process_single_batch, batch_args)
-        results.sort(key=lambda r: r["batch_num"])
+        results.sort(key=lambda r: r.get("batch_num", -1))
 
         # --- Sequential: EvolutionGate (needs incremental dedup state) ---
         existing_edges = self._load_jsonl(edges_path)
@@ -319,9 +378,9 @@ class MemoryCompactor:
         new_node_ids: Set[str] = set()
 
         for result in results:
-            batch_num = result["batch_num"]
+            batch_num = result.get("batch_num", "?")
 
-            if result["error"]:
+            if result.get("error"):
                 logger.error(f"Batch {batch_num} failed: {result['error']} — skipping")
                 continue
 
@@ -382,6 +441,7 @@ class MemoryCompactor:
                 })
 
             all_ids = existing_node_ids | new_node_ids
+            accepted_batch_node_ids = {node.get("id") for node in gate_report.accepted}
             for edge in result["proposed_edges"]:
                 source, target, edge_type = edge.get("source"), edge.get("target"), edge.get("type")
                 if not source or not target or not edge_type:
@@ -390,6 +450,22 @@ class MemoryCompactor:
                     continue
                 if source not in all_ids or target not in all_ids:
                     continue
+
+                if edge_type in ["overrides", "refutes"]:
+                    if source not in accepted_batch_node_ids:
+                        logger.warning(f"Rejecting edge {source} --{edge_type}--> {target} because source was not accepted in this batch.")
+                        events_buffer.append({
+                            "timestamp": datetime.now().isoformat(timespec="seconds"),
+                            "event": "memory.edge.rejected",
+                            "node_id": source,
+                            "claim": f"Rejected edge: {source} -> {target} ({edge_type}) because source node was not accepted in this batch.",
+                            "evidence": [],
+                            "validator": "evolution_gate",
+                            "status": "rejected",
+                            "reason": "destructive edge source not accepted in same batch",
+                        })
+                        continue
+
                 edges_buffer.append({"source": source, "target": target, "type": edge_type})
 
             # Log critic votes
@@ -427,6 +503,9 @@ class MemoryCompactor:
             self._append_jsonl(events_path, event)
 
         logger.info(f"Compaction completed. Proposed {len(nodes_buffer)} nodes, appended {len(edges_buffer)} edges.")
+
+        # Record planned deprecations before calling lifecycle
+        self._record_planned_deprecations(validator_name="memory_os_compactor")
 
         # Trigger lifecycle transitions and manifest compilation via classes
         from memory_os.modules.lifecycle import LifecycleManager
@@ -615,19 +694,82 @@ class MemoryCompactor:
             })
 
         for edge in proposed_edges:
-            key = (edge.get("source"), edge.get("target"), edge.get("type"))
+            source = edge.get("source")
+            target = edge.get("target")
+            edge_type = edge.get("type")
+
+            if edge_type != "overrides":
+                logger.warning(f"Rejecting edge {source} --{edge_type}--> {target} because type is not 'overrides' in compress_graph.")
+                self._append_jsonl(events_path, {
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "event": "memory.edge.rejected",
+                    "node_id": source or "unknown",
+                    "claim": f"Rejected edge: {source} -> {target} ({edge_type}) because type is not 'overrides' for compression.",
+                    "evidence": [],
+                    "validator": "evolution_gate",
+                    "status": "rejected",
+                    "reason": "edge type is not 'overrides' for compression",
+                })
+                continue
+
+            if edge_type not in VALID_EDGE_TYPES:
+                logger.warning(f"Rejecting edge {source} --{edge_type}--> {target} because type is not in VALID_EDGE_TYPES.")
+                self._append_jsonl(events_path, {
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "event": "memory.edge.rejected",
+                    "node_id": source or "unknown",
+                    "claim": f"Rejected edge: {source} -> {target} ({edge_type}) because type is not a valid edge type.",
+                    "evidence": [],
+                    "validator": "evolution_gate",
+                    "status": "rejected",
+                    "reason": "invalid edge type",
+                })
+                continue
+
+            if source not in new_node_ids:
+                logger.warning(f"Rejecting edge {source} --{edge_type}--> {target} because source was not accepted in this compression run.")
+                self._append_jsonl(events_path, {
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "event": "memory.edge.rejected",
+                    "node_id": source,
+                    "claim": f"Rejected edge: {source} -> {target} ({edge_type}) because source node was not accepted in this compression run.",
+                    "evidence": [],
+                    "validator": "evolution_gate",
+                    "status": "rejected",
+                    "reason": "compression edge source not in new_node_ids",
+                })
+                continue
+
+            if target not in existing_node_ids:
+                logger.warning(f"Rejecting edge {source} --{edge_type}--> {target} because target is not in existing_node_ids.")
+                self._append_jsonl(events_path, {
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "event": "memory.edge.rejected",
+                    "node_id": source,
+                    "claim": f"Rejected edge: {source} -> {target} ({edge_type}) because target is not in existing_node_ids.",
+                    "evidence": [],
+                    "validator": "evolution_gate",
+                    "status": "rejected",
+                    "reason": "compression edge target not in existing_node_ids",
+                })
+                continue
+
+            key = (source, target, edge_type)
             if key in existing_edge_keys:
                 logger.info(f"Skipping duplicate edge: {key[0]} --{key[2]}--> {key[1]}")
                 continue
-            if edge.get("source") in new_node_ids and edge.get("target") in existing_node_ids:
-                self._append_jsonl(edges_path, edge)
-                existing_edge_keys.add(key)
-                edge_append_count += 1
-                logger.info(f"Appended compression edge: {edge['source']} -> {edge['target']} ({edge['type']})")
+
+            self._append_jsonl(edges_path, edge)
+            existing_edge_keys.add(key)
+            edge_append_count += 1
+            logger.info(f"Appended compression edge: {source} -> {target} ({edge_type})")
 
         logger.info(f"Compression completed. Proposed {node_append_count} merged nodes, appended {edge_append_count} override edges.")
 
         if node_append_count > 0:
+            # Record planned deprecations before calling lifecycle
+            self._record_planned_deprecations(validator_name="memory_os_compressor")
+
             from memory_os.modules.lifecycle import LifecycleManager
             logger.info("Running lifecycle transition validations to deprecate old nodes...")
             lifecycle = LifecycleManager(self.config)

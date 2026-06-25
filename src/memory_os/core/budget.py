@@ -23,10 +23,19 @@ class BudgetManager:
         try:
             with open(self.state_file, "r", encoding="utf-8") as f:
                 state = json.load(f)
-                
+
             # Reset if it's a new day
             if state.get("date") != self._get_today_str():
                 return {"date": self._get_today_str(), "tokens_used": 0}
+
+            tokens_used = state.get("tokens_used", 0)
+            if isinstance(tokens_used, bool) or not isinstance(tokens_used, (int, float)) or tokens_used < 0:
+                # Corrupt/tampered state (e.g. a negative value written by a
+                # caller that bypassed add_usage's own validation) — reset
+                # rather than trust it, since a negative value would silently
+                # un-exhaust an already-exhausted budget.
+                return {"date": self._get_today_str(), "tokens_used": 0}
+            state["tokens_used"] = int(tokens_used)
             return state
         except Exception:
             return {"date": self._get_today_str(), "tokens_used": 0}
@@ -40,11 +49,14 @@ class BudgetManager:
 
     def add_usage(self, tokens: int):
         """Record usage of tokens."""
+        if isinstance(tokens, bool) or not isinstance(tokens, (int, float)) or tokens < 0:
+            raise ValueError(f"tokens must be a non-negative number, got {tokens!r}")
+
         # Ensure date is current
         today = self._get_today_str()
         if self._state.get("date") != today:
             self._state = {"date": today, "tokens_used": 0}
-            
+
         self._state["tokens_used"] = self._state.get("tokens_used", 0) + tokens
         self._save_state()
 

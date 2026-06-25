@@ -17,3 +17,7 @@ class ValidationError(MemoryOSError):
 class GraphIntegrityError(MemoryOSError):
     """Raised when graph invariants are violated (e.g., missing related nodes)."""
     pass
+
+class TelemetryBudgetExceeded(MemoryOSError):
+    """Raised when telemetry is disabled or a hard cap blocks further writes."""
+    pass

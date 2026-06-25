@@ -6,6 +6,7 @@ extract completed tasks into task_capsules.jsonl.
 """
 
 import json
+from collections import deque
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -50,10 +51,13 @@ class TranscriptIngestor:
         if not transcript_path.exists():
             raise FileNotFoundError(f"Transcript not found: {transcript_path}")
             
-        lines = transcript_path.read_text(encoding="utf-8").splitlines()
-        # Take only the last N lines to avoid token explosion
-        recent_lines = lines[-max_lines:]
-        
+        # Bounded rolling buffer instead of reading the whole file into memory
+        # — a multi-GB transcript would otherwise OOM here.
+        recent_lines: "deque[str]" = deque(maxlen=max_lines)
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            for line in f:
+                recent_lines.append(line)
+
         convo = []
         for line in recent_lines:
             try:
@@ -62,13 +66,15 @@ class TranscriptIngestor:
                 content = data.get("content", "")
                 if not content:
                     continue
+                if not isinstance(content, str):
+                    content = str(content)
                 # Truncate very long outputs (like view_file results)
                 if len(content) > 1000:
                     content = content[:1000] + "... [TRUNCATED]"
                 convo.append(f"[{step_type}]: {content}")
             except json.JSONDecodeError:
                 continue
-                
+
         return "\n\n".join(convo)
 
     def ingest(self, transcript_path: Path, provider: Optional[str] = None, model: Optional[str] = None) -> List[Dict[str, Any]]:

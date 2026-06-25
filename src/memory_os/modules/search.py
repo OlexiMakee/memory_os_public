@@ -49,12 +49,17 @@ class MemorySearcher:
                             visited.add(rel)
 
                 for edge in edges:
-                    if edge["source"] == node_id and edge["target"] not in visited:
-                        next_level.add(edge["target"])
-                        visited.add(edge["target"])
-                    elif edge["target"] == node_id and edge["source"] not in visited:
-                        next_level.add(edge["source"])
-                        visited.add(edge["source"])
+                    edge_source = edge.get("source")
+                    edge_target = edge.get("target")
+                    if edge_source is None or edge_target is None:
+                        # Malformed edge — skip rather than crash the whole traversal.
+                        continue
+                    if edge_source == node_id and edge_target not in visited:
+                        next_level.add(edge_target)
+                        visited.add(edge_target)
+                    elif edge_target == node_id and edge_source not in visited:
+                        next_level.add(edge_source)
+                        visited.add(edge_source)
 
             current_level = next_level
             if not current_level:
@@ -139,16 +144,20 @@ class MemorySearcher:
 
         query_lower = query.strip().lower()
 
-        # 1. Search memory nodes
-        nodes_by_id = {node["id"]: node for node in nodes}
+        # 1. Search memory nodes — a single schema-invalid record (missing a
+        # required field) must not crash search for the whole graph.
+        nodes_by_id = {node["id"]: node for node in nodes if node.get("id")}
         matched_node_ids = set()
         for node in nodes:
-            if (query_lower in node["id"].lower() or
-                query_lower in node["summary"].lower() or
-                any(query_lower in ev.lower() for ev in node["evidence"]) or
-                query_lower in node["type"].lower() or
-                any(query_lower in tag.lower() for tag in node.get("tags", []))):
-                matched_node_ids.add(node["id"])
+            node_id = node.get("id")
+            if not node_id:
+                continue
+            if (query_lower in str(node_id).lower() or
+                query_lower in str(node.get("summary", "")).lower() or
+                any(query_lower in str(ev).lower() for ev in node.get("evidence", []) or []) or
+                query_lower in str(node.get("type", "")).lower() or
+                any(query_lower in str(tag).lower() for tag in node.get("tags", []) or [])):
+                matched_node_ids.add(node_id)
 
         all_matched_node_ids = self.traverse_graph(matched_node_ids, depth, nodes_by_id, edges)
         matched_nodes = [nodes_by_id[nid] for nid in all_matched_node_ids if nid in nodes_by_id]

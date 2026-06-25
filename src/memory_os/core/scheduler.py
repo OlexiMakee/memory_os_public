@@ -1,5 +1,5 @@
 from typing import List, Any, Optional, Dict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import time
 import multiprocessing
 from memory_os.core.interfaces import IHardwareScheduler
@@ -22,12 +22,24 @@ class HardwareScheduler(IHardwareScheduler):
 
     def execute_parallel(self, func: Any, items: List[Any], max_workers: Optional[int] = None) -> List[Any]:
         """Execute a function in parallel across items. Uses ThreadPool for I/O bounds by default.
-        Could be expanded to switch to ProcessPool for CPU-bound tasks."""
+        Could be expanded to switch to ProcessPool for CPU-bound tasks.
+
+        Isolates per-item failures instead of letting the first worker
+        exception propagate and discard every other already-completed
+        result (executor.map's old behavior) — a malformed single item
+        (e.g. one bad LLM batch) no longer aborts the whole call. Order is
+        preserved to match the previous executor.map-based contract.
+        """
         workers = max_workers if max_workers else self.max_workers
-        results = []
+        results: List[Any] = [None] * len(items)
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            for result in executor.map(func, items):
-                results.append(result)
+            future_to_index = {executor.submit(func, item): i for i, item in enumerate(items)}
+            for future in as_completed(future_to_index):
+                i = future_to_index[future]
+                try:
+                    results[i] = future.result()
+                except Exception as exc:
+                    results[i] = {"ok": False, "item": items[i], "error": str(exc)}
         return results
 
     def cache_get(self, key: str) -> Optional[Any]:

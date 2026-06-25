@@ -1,6 +1,8 @@
 import time
 from typing import Optional
 
+from memory_os.core.safe_id import validate_outbound_base_url
+
 from ..base import LLMProvider
 from ..types import LLMRequest, LLMResponse
 
@@ -12,12 +14,14 @@ except ImportError:
 class OpenAICompatibleProvider(LLMProvider):
     name = "openai_compatible"
 
-    def __init__(self, base_url: str, api_key: str = "local"):
+    def __init__(self, base_url: str, api_key: str = "local", timeout: float = 30.0):
         if OpenAI is None:
             raise ImportError("openai package is required for OpenAICompatibleProvider")
+        validate_outbound_base_url(base_url, "base_url")
         self.client = OpenAI(
             base_url=base_url,
             api_key=api_key,
+            timeout=timeout,
         )
 
     def generate(self, request: LLMRequest) -> LLMResponse:

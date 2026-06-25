@@ -99,16 +99,24 @@ class MemoryRepository:
         from memory_os.core.core import MemoryOS
         db = MemoryOS(self.config)
         nodes = self.get_nodes()
-        for n in nodes:
-            db.insert_graph_node(
-                node_id=n.id,
-                node_type=n.type,
-                summary=n.summary,
-                status=n.status,
-                freshness=n.freshness,
-                trust=n.trust,
-                tags=",".join(n.tags) if n.tags else None
-            )
+        conn = db.get_connection()
+        try:
+            for n in nodes:
+                tags = ",".join(n.tags) if n.tags else None
+                conn.execute("""
+                    INSERT INTO graph_nodes (id, type, summary, status, freshness, trust, tags)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        type = excluded.type,
+                        summary = excluded.summary,
+                        status = excluded.status,
+                        freshness = excluded.freshness,
+                        trust = excluded.trust,
+                        tags = excluded.tags
+                """, (n.id, n.type, n.summary, n.status, n.freshness, n.trust, tags))
+            conn.commit()
+        finally:
+            conn.close()
 
     def get_edges(self) -> List[MemoryEdge]:
         raw = self.storage.load_jsonl(self._get_edges_path())
@@ -124,7 +132,11 @@ class MemoryRepository:
     def get_patches(self) -> List[Any]:
         from memory_os.core.patch import RelationPatch
         raw = self.storage.load_jsonl(self._get_patches_path())
-        return [RelationPatch(**d) for d in raw]
+        deduped = {}
+        for d in raw:
+            patch = RelationPatch.from_dict(d)
+            deduped[patch.id] = patch
+        return list(deduped.values())
 
     def save_patch(self, patch: Any) -> None:
         from dataclasses import asdict

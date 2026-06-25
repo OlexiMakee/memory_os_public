@@ -7,6 +7,31 @@ class TaskQueue:
 
     def __init__(self, db: MemoryOS):
         self.db = db
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        """memory_os_jobs is queue-owned schema — MemoryOS.init_db() doesn't create it."""
+        conn = self.db.get_connection()
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS memory_os_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    task_type TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 5,
+                    provider TEXT,
+                    model TEXT,
+                    input_ref TEXT,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    created_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memory_os_jobs_dequeue "
+                "ON memory_os_jobs(status, priority DESC, created_at ASC)"
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def enqueue(self, task_type: str, provider: str, model: str, input_ref: str, priority: int = 5) -> str:
         """Enqueue a new background task."""

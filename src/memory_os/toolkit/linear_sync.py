@@ -27,8 +27,8 @@ def get_linear_team_id(api_key: str) -> str:
 
 def get_linear_issues(api_key: str) -> dict:
     query = """
-    query {
-      issues {
+    query($after: String) {
+      issues(after: $after) {
         nodes {
           id
           title
@@ -36,12 +36,38 @@ def get_linear_issues(api_key: str) -> dict:
             type
           }
         }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
       }
     }
     """
-    data = execute_graphql(api_key, query)
-    issues = data.get("data", {}).get("issues", {}).get("nodes", [])
-    return {issue["title"].strip(): issue for issue in issues}
+    issues = []
+    has_next_page = True
+    after_cursor = None
+    
+    while has_next_page:
+        variables = {}
+        if after_cursor:
+            variables["after"] = after_cursor
+        data = execute_graphql(api_key, query, variables)
+        if not data or not isinstance(data, dict):
+            break
+        data_body = data.get("data")
+        if not data_body or not isinstance(data_body, dict):
+            break
+        issues_data = data_body.get("issues")
+        if not issues_data or not isinstance(issues_data, dict):
+            break
+        nodes = issues_data.get("nodes", [])
+        issues.extend(nodes)
+        
+        page_info = issues_data.get("pageInfo", {})
+        has_next_page = page_info.get("hasNextPage", False)
+        after_cursor = page_info.get("endCursor")
+        
+    return {issue["title"].strip(): issue for issue in issues if isinstance(issue, dict) and "title" in issue}
 
 def create_linear_issue(api_key: str, team_id: str, title: str):
     query = """
@@ -74,7 +100,7 @@ def execute_graphql(api_key: str, query: str, variables: dict = None) -> dict:
     )
     
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:
             return json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
         logger.error(f"Linear API error: {e.read().decode('utf-8')}")

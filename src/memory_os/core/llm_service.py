@@ -25,8 +25,15 @@ def _call_llm_direct(user_message: str, system_prompt: str,
             try:
                 import urllib.request
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{resolved_model}:generateContent?key={api_key}"
+                # systemInstruction is a separate field from contents — keeping
+                # the trusted instruction structurally apart from untrusted
+                # user_message (transcript text, memory summaries, etc.)
+                # instead of string-concatenating them into one user message,
+                # which gave injected text in user_message no structural
+                # separation from the real system prompt.
                 payload = {
-                    "contents": [{"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_message}"}]}]
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "contents": [{"role": "user", "parts": [{"text": user_message}]}],
                 }
                 data = json.dumps(payload).encode("utf-8")
                 req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})

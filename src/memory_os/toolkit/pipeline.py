@@ -15,6 +15,7 @@ Usage:
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -29,12 +30,20 @@ logger = get_logger(__name__)
 # Step runner
 # ---------------------------------------------------------------------------
 
+
+def _redact_for_display(cmd: str) -> str:
+    """Mask secret-bearing flag values (e.g. --api-key, --token) before printing a step."""
+    cmd = re.sub(r"(--api-key\s+)\S+", r"\1[REDACTED]", cmd)
+    cmd = re.sub(r"(--token\s+)\S+", r"\1[REDACTED]", cmd)
+    return cmd
+
+
 def _run_step(step_args: List[str], label: str) -> int:
     """Run a single memory_os subcommand. Returns exit code."""
     cmd = [sys.executable, "-m", "memory_os"] + step_args
     print(f"\n{'─'*60}")
     print(f"  STEP: {label}")
-    print(f"  CMD : {' '.join(step_args)}")
+    print(f"  CMD : {_redact_for_display(' '.join(step_args))}")
     print(f"{'─'*60}")
 
     result = subprocess.run(cmd, cwd=Path.cwd())
@@ -150,7 +159,7 @@ class PipelineRunner:
             print("\n[dry-run] Would execute:")
             for i, (cmd, label) in enumerate(steps, 1):
                 print(f"  {i}. {label}")
-                print(f"     memory_os {cmd}")
+                print(f"     memory_os {_redact_for_display(cmd)}")
             return 0
 
         failed = 0

@@ -8,11 +8,14 @@ the workflow remains inspectable, scriptable, and project-local.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+
+from memory_os.core.safe_id import validate_safe_id
 
 
 SPEC_TEMPLATE = """# Spec: {title}
@@ -210,7 +213,7 @@ class SpecManager:
         feature_id: Optional[str] = None,
         force: bool = False,
     ) -> SpecPaths:
-        feature_id = feature_id or self._next_feature_id(title)
+        feature_id = validate_safe_id(feature_id or self._next_feature_id(title), "feature id")
         feature_root = self.specs_dir / feature_id
         if feature_root.exists() and not force:
             raise FileExistsError(f"{feature_root.relative_to(self.root)} already exists")
@@ -335,6 +338,7 @@ class SpecManager:
             return None
         if not feature:
             return dirs[0]
+        validate_safe_id(feature, "feature selector")
         exact = self.specs_dir / feature
         if exact.is_dir():
             return exact
@@ -344,6 +348,93 @@ class SpecManager:
         if len(matches) > 1:
             raise ValueError(f"Feature selector '{feature}' is ambiguous")
         raise FileNotFoundError(f"No spec matches '{feature}'")
+
+    def build_contract(self, feature: Optional[str] = None, risk_class: Optional[str] = None) -> Dict[str, Any]:
+        """Derive a machine-readable contract from existing spec/plan artifacts. No LLM call."""
+        feature_root = self._resolve_feature(feature)
+        if feature_root is None:
+            raise FileNotFoundError("No specs found. Run `memory_os spec init \"<title>\"` first.")
+        paths = self._paths(feature_root)
+        spec_text = self._read(paths.spec)
+        plan_text = self._read(paths.plan)
+
+        title_match = re.search(r"^# Spec:[ \t]*(.*)$", spec_text, flags=re.MULTILINE)
+        title = title_match.group(1).strip() if title_match and title_match.group(1).strip() else paths.feature_id
+
+        rollback = self._section_field(plan_text, "Rollback path")
+        complexity_items = self._section_bullets(plan_text, "## Complexity Ledger")
+
+        return {
+            "feature_id": paths.feature_id,
+            "title": title,
+            "risk_class": risk_class or self._infer_risk_class(rollback, complexity_items),
+            "objective": self._section_body(spec_text, "## Goal"),
+            "non_goals": self._section_bullets(spec_text, "## Out Of Scope"),
+            "inputs_and_outputs": self._section_bullets(spec_text, "## Functional Requirements"),
+            "constraints": self._section_bullets(spec_text, "## Non-Functional Requirements"),
+            "acceptance_criteria": self._section_bullets(spec_text, "#### Acceptance Scenarios"),
+            "required_verification": self._section_body(plan_text, "## Verification Plan"),
+            "required_context_sources": [
+                str(p.relative_to(self.root))
+                for p in (paths.spec, paths.plan, paths.tasks, paths.checklist, self.constitution_path)
+                if p.exists()
+            ],
+            "rollback_plan": rollback or "[NOT FOUND: plan.md Migration And Compatibility / Rollback path is empty]",
+        }
+
+    def write_contract(
+        self,
+        feature: Optional[str] = None,
+        risk_class: Optional[str] = None,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        contract = self.build_contract(feature, risk_class)
+        feature_root = self.specs_dir / contract["feature_id"]
+        json_path = feature_root / "contract.json"
+        md_path = feature_root / "contract.md"
+
+        if force or not json_path.exists():
+            json_path.write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
+        if force or not md_path.exists():
+            md_path.write_text(contract_to_markdown(contract), encoding="utf-8")
+
+        contract["contract_json"] = str(json_path.relative_to(self.root))
+        contract["contract_md"] = str(md_path.relative_to(self.root))
+        return contract
+
+    @staticmethod
+    def _infer_risk_class(rollback: str, complexity_items: List[str]) -> str:
+        """Deterministic heuristic — no LLM call. Callers can always override explicitly."""
+        if rollback and "[NOT FOUND" not in rollback:
+            return "migration-risk"
+        if complexity_items:
+            return "moderate"
+        return "low"
+
+    @staticmethod
+    def _section_body(text: str, heading: str) -> str:
+        """Return the body text directly under `heading` up to the next heading of equal-or-higher level."""
+        level = len(heading) - len(heading.lstrip("#"))
+        pattern = re.compile(
+            rf"^{re.escape(heading)}\s*$\n(.*?)(?=^#{{1,{level}}}\s|\Z)",
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        match = pattern.search(text)
+        return match.group(1).strip() if match else ""
+
+    @staticmethod
+    def _section_bullets(text: str, heading: str) -> List[str]:
+        """Return top-level '- ' bullet lines directly under `heading`."""
+        body = SpecManager._section_body(text, heading)
+        return [line[2:].strip() for line in body.splitlines() if line.strip().startswith("- ")]
+
+    @staticmethod
+    def _section_field(text: str, label: str) -> str:
+        """Return the value after a '- {label}:' line anywhere in the document."""
+        # [ \t]* (not \s*) so this never crosses a newline into the next line/heading
+        # when the field is left blank in the template.
+        match = re.search(rf"^-[ \t]*{re.escape(label)}:[ \t]*(.*)$", text, flags=re.MULTILINE)
+        return match.group(1).strip() if match else ""
 
     def _write_template(self, path: Path, template: str, context: Dict[str, str], force: bool) -> None:
         if path.exists() and not force:
@@ -400,4 +491,62 @@ def report_to_markdown(report: Dict[str, Any]) -> str:
     if report.get("errors"):
         lines.extend(["", "## Errors"])
         lines.extend(f"- {error}" for error in report["errors"])
+    return "\n".join(lines)
+
+
+def contract_to_markdown(contract: Dict[str, Any]) -> str:
+    def bullets(items: Iterable[str]) -> List[str]:
+        items = list(items)
+        return [f"- {item}" for item in items] if items else ["- (none found)"]
+
+    lines = [
+        f"# Contract: {contract['title']}",
+        "",
+        "Status: generated from existing spec/plan artifacts. No LLM call required.",
+        f"Feature: {contract['feature_id']}",
+        f"Risk class: {contract['risk_class']}",
+        "",
+        "## Objective",
+        "",
+        contract["objective"] or "[NOT FOUND: spec.md Goal section is empty]",
+        "",
+        "## Non-Goals",
+        "",
+        *bullets(contract["non_goals"]),
+        "",
+        "## Inputs And Outputs",
+        "",
+        "Derived from Functional Requirements (spec.md):",
+        "",
+        *bullets(contract["inputs_and_outputs"]),
+        "",
+        "## Constraints",
+        "",
+        "Derived from Non-Functional Requirements (spec.md):",
+        "",
+        *bullets(contract["constraints"]),
+        "",
+        "## Acceptance Criteria",
+        "",
+        "Derived from Acceptance Scenarios (spec.md):",
+        "",
+        *bullets(contract["acceptance_criteria"]),
+        "",
+        "## Required Verification",
+        "",
+        "Derived from the Verification Plan (plan.md):",
+        "",
+        contract["required_verification"] or "[NOT FOUND: plan.md Verification Plan section is empty]",
+        "",
+        "## Required Context Sources",
+        "",
+        *bullets(contract["required_context_sources"]),
+        "",
+        "## Rollback Plan",
+        "",
+        "Derived from Migration And Compatibility (plan.md):",
+        "",
+        contract["rollback_plan"],
+        "",
+    ]
     return "\n".join(lines)

@@ -63,6 +63,26 @@ memory_os triage
 | `backlinks <id>` | Show all nodes that reference a given node |
 | `audit` | Audit control-plane state |
 
+## Engineering Control Plane
+
+The engineering control plane turns a vague request into a verified result: idea -> spec -> contract -> context -> implementation -> evidence -> review. These commands have read-only or `--dry-run` paths that work fully offline with no LLM call required, so agents can inspect, route, and verify work before invoking a model.
+
+| Command | What it does |
+|---|---|
+| `idea expand --text "..."` | Turn a rough idea into a structured discovery brief prompt |
+| `contract build <spec-id>` | Derive risk class, rollback plan, and acceptance criteria from an existing spec |
+| `context build --task "..."` | Build a targeted, reproducible context pack instead of dumping the repo into the model |
+| `evidence init/add-command/verify --task <id>` | Record commands run and exit codes, then block "done" until recorded checks passed |
+| `review-pack --task <id>` | Assemble contract, context pack, and evidence into one reviewer-facing document |
+| `change-size` | Warn when a change touches too many files or mixes source with generated artifacts |
+| `eval list/run/compare` | Run local-deterministic and optional LLM-judge eval suites for nondeterministic behavior |
+| `security scan` | Scan local memory stores for secrets and prompt-injection markers |
+| `resources` / `telemetry audit` | Check disk, SQLite WAL, JSONL, and bounded-telemetry health |
+| `route --task "..."` / `budget status` | Show provider/model routing and current token budget status without a network call |
+| `prompt list/show/render` | Inspect versioned, hashed prompt templates without an LLM call |
+| `adapters audit` | Check which optional adapters are installed; none are required by default |
+| `run start/status/complete` | Keep lightweight native run and checkpoint records for multi-step workflows |
+
 ## How it works
 
 Memory lives in `memory/nodes.jsonl` and `memory/edges.jsonl` — plain text files you can read and edit.

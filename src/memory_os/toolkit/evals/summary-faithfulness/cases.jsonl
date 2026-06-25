@@ -1,0 +1,2 @@
+{"id": "faithful-basic-config", "source_text": "MemoryOSConfig resolves the config file path from an explicit argument, an environment variable, or the current working directory default.", "summary": "MemoryOSConfig chooses a config path from an argument, env var, or cwd default."}
+{"id": "faithful-basic-search", "source_text": "MemorySearcher loads nodes, edges, and a snapshot, then returns matching memory nodes and code-file shaped results.", "summary": "MemorySearcher searches memory graph data and code snapshot data."}

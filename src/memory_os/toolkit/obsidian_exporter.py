@@ -3,6 +3,7 @@ import shutil
 from pathlib import Path
 from typing import Dict, List, Any
 from memory_os.core.logger import get_logger
+from memory_os.core.safe_id import validate_safe_node_id
 
 logger = get_logger(__name__)
 
@@ -37,7 +38,12 @@ def export_obsidian_vault(root_dir: Path, nodes_path: Path, edges_path: Path):
             node_id = node.get("id")
             if not node_id:
                 continue
-                
+            try:
+                validate_safe_node_id(node_id)
+            except (ValueError, TypeError) as exc:
+                logger.error(f"Skipping node with unsafe id {node_id!r}: {exc}")
+                continue
+
             node_path = vault_dir / f"{node_id}.md"
             
             # YAML Frontmatter

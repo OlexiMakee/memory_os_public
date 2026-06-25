@@ -6,10 +6,12 @@
 /scripts/                           export-ignore
 /AGENTS.md                          export-ignore
 /INDEX.md                           export-ignore
+/DEV_STRATEGY.md                    export-ignore
 /append_log.py                      export-ignore
 /run_llm_benchmark.py               export-ignore
 /test_auto.py                       export-ignore
 .DS_Store                           export-ignore
 src/memory_os/memory_graph/         export-ignore
 src/memory_os/user_persona/         export-ignore
+src/memory_os/ide_grant_private.py  export-ignore
 src/memory_os/toolkit/*.bak         export-ignore

@@ -14,6 +14,20 @@ memory_os = "memory_os.cli:main"
 # When portable — set GEMINI_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY in env.
 dev = ["pytest"]
 
+# Optional adapters (see DEV_STRATEGY.md Stage 13/14 and `memory_os adapters audit`).
+# None of these are required for core/toolkit commands; each adapter lazy-imports its
+# package and degrades to {"ok": False, "detail": "... not installed"} when absent.
+adapters-litellm = ["litellm"]
+adapters-markitdown = ["markitdown"]
+adapters-duckdb = ["duckdb"]
+adapters-otel = ["opentelemetry-api", "opentelemetry-sdk"]
+adapters-qdrant = ["qdrant-client"]
+adapters-phoenix = ["arize-phoenix"]
+adapters-langfuse = ["langfuse"]
+adapters-mlflow = ["mlflow"]
+adapters-pydantic-ai = ["pydantic-ai"]
+adapters-mcp = ["mcp"]
+
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"

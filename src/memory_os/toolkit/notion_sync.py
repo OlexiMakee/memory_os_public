@@ -197,7 +197,7 @@ def get_page_content_markdown_recursive(api_key: str, block_id: str, depth: int 
         while has_more:
             query_url = f"{url}&start_cursor={next_cursor}" if next_cursor else url
             req = urllib.request.Request(query_url, headers=headers, method="GET")
-            with urllib.request.urlopen(req) as response:
+            with urllib.request.urlopen(req, timeout=30) as response:
                 res = json.loads(response.read().decode("utf-8"))
                 for block in res.get("results", []):
                     block_markdown = get_block_markdown(block, depth)
@@ -220,6 +220,9 @@ def get_page_content_markdown_recursive(api_key: str, block_id: str, depth: int 
         
     return "".join(markdown_parts).strip()
 
+def fetch_page_content(api_key: str, page_id: str) -> str:
+    return get_page_content_markdown_recursive(api_key, page_id)
+
 def find_database_in_page(api_key: str, page_id: str) -> str:
     url = f"{NOTION_API_URL}/blocks/{page_id}/children"
     headers = {
@@ -228,7 +231,7 @@ def find_database_in_page(api_key: str, page_id: str) -> str:
     }
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:
             res = json.loads(response.read().decode("utf-8"))
             for block in res.get("results", []):
                 if block.get("type") == "child_database":
@@ -258,7 +261,7 @@ def query_notion_database(api_key: str, database_id: str, cursor: str = None) ->
     )
     
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8")

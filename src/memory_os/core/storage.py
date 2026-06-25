@@ -35,10 +35,23 @@ class FileSystemMemoryStorage(IMemoryStorage):
         if not filepath.exists():
             return {}
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                return json.load(f)
+            if filepath.stat().st_size == 0:
+                return {}
         except Exception:
+            pass
+
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+        if not content.strip():
             return {}
+
+        try:
+            return json.loads(content)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger("memory_os.storage")
+            logger.warning(f"CRITICAL: JSON file at {filepath} exists but could not be parsed: {e}")
+            raise e
 
     def save_json(self, filepath: Path, item: Dict[str, Any]) -> None:
         filepath.parent.mkdir(parents=True, exist_ok=True)

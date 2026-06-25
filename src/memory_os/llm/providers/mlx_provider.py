@@ -2,17 +2,18 @@ import time
 from ..base import LLMProvider
 from ..types import LLMRequest, LLMResponse
 
-try:
-    from mlx_lm import load, generate
-except ImportError:
-    load = None
-    generate = None
-
 class MLXProvider(LLMProvider):
     name = "mlx"
 
     def __init__(self, model_path: str):
-        if load is None:
+        # Imported lazily, not at module level: mlx_lm performs native Metal
+        # initialization on import that can abort the whole process with an
+        # uncaught native exception (not a catchable Python ImportError) on
+        # some systems. Importing this MODULE must stay safe even when
+        # mlx_lm itself is broken; only constructing a provider should risk it.
+        try:
+            from mlx_lm import load, generate
+        except ImportError:
             raise ImportError("mlx_lm package is required for MLXProvider")
         self.model_path = model_path
         self.model, self.tokenizer = load(model_path)

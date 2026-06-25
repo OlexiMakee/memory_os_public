@@ -1,0 +1,5 @@
+{
+  "kind": "llm_judge",
+  "pass_threshold": 0.9,
+  "description": "Optional LLM-judged checks for whether summaries preserve source text claims."
+}

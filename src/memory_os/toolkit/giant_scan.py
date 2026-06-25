@@ -28,6 +28,7 @@ from memory_os.core.storage import FileSystemMemoryStorage
 # ---------------------------------------------------------------------------
 
 CHAR_BUDGET_WARNING = 500_000  # chars before --force is required
+CHAR_BUDGET_HARD_CAP = 5_000_000  # absolute ceiling even with --force, to bound memory use
 
 EXCLUDED_DIRS: Set[str] = {
     ".git", ".tmp.driveupload", ".venv", "venv", "venv_auto",
@@ -99,12 +100,23 @@ class RepoCollector:
         self.project_root = project_root
         self.scan_root = target_dir if target_dir else project_root
 
-    def collect(self, max_file_bytes: int = 500_000) -> str:
-        """Walk the project tree and concatenate all source files."""
+    def collect(self, max_file_bytes: int = 500_000, char_budget: Optional[int] = None) -> str:
+        """Walk the project tree and concatenate all source files.
+
+        `char_budget`, if given, stops collection as soon as the running
+        total crosses it — without this, a huge target directory loads
+        everything into memory before GiantScanRunner.run() ever gets a
+        chance to check its own budget against the result.
+        """
         blocks: List[str] = []
         total_chars = 0
+        truncated = False
 
         for path in sorted(self.scan_root.rglob("*")):
+            if path.is_symlink():
+                # A symlink inside the repo can point anywhere on disk
+                # (e.g. /etc/passwd); is_file() below would follow it.
+                continue
             if not path.is_file():
                 continue
             if path.suffix.lower() not in SOURCE_SUFFIXES:
@@ -137,7 +149,14 @@ class RepoCollector:
             blocks.append(f"{header}\n{text}\n")
             total_chars += len(text)
 
-        return "".join(blocks), total_chars
+            if char_budget is not None and total_chars > char_budget:
+                truncated = True
+                break
+
+        result = "".join(blocks)
+        if truncated:
+            result += "\n--- [COLLECTION STOPPED: char_budget exceeded] ---\n"
+        return result, total_chars
 
 
 # ---------------------------------------------------------------------------
@@ -220,12 +239,21 @@ class GiantScanRunner:
         scan_root = None
         if target_dir:
             scan_root = (self.root / target_dir).resolve()
-            if not str(scan_root).startswith(str(self.root)):
+            try:
+                scan_root.relative_to(self.root)
+            except ValueError:
+                # A sibling directory with the same string prefix (e.g.
+                # memory_os_secrets next to memory_os) would pass a plain
+                # startswith() check; relative_to() requires real path
+                # containment instead.
                 return {"status": "aborted", "reason": "Target directory is outside project root."}
 
-        # 1. Collect source code
+        # 1. Collect source code — stop early once over budget instead of
+        # reading a huge target directory fully into memory just to find
+        # out afterward that it's going to be aborted anyway.
         repo = RepoCollector(self.root, target_dir=scan_root)
-        source_text, char_count = repo.collect()
+        collect_budget = CHAR_BUDGET_HARD_CAP if force else CHAR_BUDGET_WARNING
+        source_text, char_count = repo.collect(char_budget=collect_budget)
 
         # 2. Budget guard
         if char_count > CHAR_BUDGET_WARNING and not force:

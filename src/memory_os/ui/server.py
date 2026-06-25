@@ -6,6 +6,7 @@ from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
 from memory_os.core.config import MemoryOSConfig
+from memory_os.core.safe_id import validate_safe_id
 from memory_os.ui.data_provider import DefaultGraphDataProvider
 
 # Setup mimetypes for UI assets
@@ -13,16 +14,56 @@ mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
+_ALLOWED_ORIGIN_HOSTS = {"127.0.0.1", "localhost", "::1"}
+MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024
+LINK_INFER_METHODS = {"cascade", "text", "llm", "both"}
+LINK_INFER_RESOURCE_MODES = {"quiet", "normal", "max"}
+
+
 class UIHTTPRequestHandler(BaseHTTPRequestHandler):
     """
     Zero-dependency HTTP handler for Memory OS Visualizer.
     Serves static UI templates and exposes REST API for the graph.
     """
-    
+
+    def _origin_allowed(self) -> bool:
+        """Reject cross-origin browser requests (CSRF/CORS-exfiltration defense).
+
+        Binding to 127.0.0.1 only stops other machines on the network, not
+        other browser tabs on this machine. A malicious page open in another
+        tab can still fetch() this server. Browsers always set an Origin
+        header on cross-origin requests (including form-submit CSRF), so
+        rejecting any Origin that isn't this loopback server blocks that
+        class of attack without breaking the UI's own same-origin requests
+        (same-origin requests often omit Origin entirely) or non-browser
+        tools like curl (no Origin header at all).
+        """
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        host = urlparse(origin).hostname
+        return host in _ALLOWED_ORIGIN_HOSTS
+
+    def _reject_cross_origin(self) -> bool:
+        if not self._origin_allowed():
+            self.send_error(403, "Cross-origin requests are not allowed")
+            return True
+        return False
+
+    def _read_json_body(self) -> dict:
+        """Read and parse a POST body, capped to MAX_REQUEST_BODY_BYTES."""
+        content_length = int(self.headers.get('Content-Length', 0))
+        if content_length <= 0:
+            return {}
+        if content_length > MAX_REQUEST_BODY_BYTES:
+            raise ValueError(f"request body exceeds {MAX_REQUEST_BODY_BYTES} bytes")
+        return json.loads(self.rfile.read(content_length).decode("utf-8"))
+
     def _send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # No Access-Control-Allow-Origin header: this UI only needs to be
+        # called from pages it itself serves (same-origin), which browsers
+        # don't apply CORS to. Cross-origin callers are rejected outright by
+        # _reject_cross_origin() before this is ever sent.
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
@@ -41,6 +82,8 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self._reject_cross_origin():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
 
@@ -165,15 +208,22 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(f.read())
 
     def do_POST(self):
+        if self._reject_cross_origin():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
-        
-        if path == '/api/switch_space':
-            content_length = int(self.headers.get('Content-Length', 0))
-            if content_length > 0:
-                post_data = self.rfile.read(content_length)
-                payload = json.loads(post_data.decode("utf-8"))
+
+        try:
+            if path == '/api/switch_space':
+                payload = self._read_json_body()
+                if not payload:
+                    self.send_error(400, "Missing payload")
+                    return
                 new_space = payload.get("space", "default")
+                try:
+                    validate_safe_id(new_space, "space")
+                except ValueError:
+                    new_space = "default"
 
                 # Validate: non-default spaces must have an existing directory with data
                 if new_space != "default":
@@ -186,7 +236,7 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
                 from memory_os.core.storage import FileSystemMemoryStorage
                 from memory_os.core.repository import MemoryRepository
                 self.server.provider.repo = MemoryRepository(FileSystemMemoryStorage(), self.server.provider.config)
-                
+
                 import urllib.request
                 url = f"http://127.0.0.1:{self.server.provider.config.daemon_port}/space"
                 req = urllib.request.Request(
@@ -200,20 +250,19 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
                         pass
                 except Exception:
                     pass
-                    
+
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self._send_cors_headers()
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "ok", "space": new_space}).encode("utf-8"))
-            else:
-                self.send_error(400, "Missing payload")
-            return
-            
-        elif path == '/api/nodes/verify':
-            content_length = int(self.headers.get('Content-Length', 0))
-            if content_length > 0:
-                payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                return
+
+            elif path == '/api/nodes/verify':
+                payload = self._read_json_body()
+                if not payload:
+                    self.send_error(400, "Missing payload")
+                    return
                 node_id = payload.get("id")
                 repo = self.server.provider.repo
                 nodes = repo.get_nodes()
@@ -223,20 +272,19 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
                         n.protocol_level = 99
                         break
                 repo.save_nodes(nodes)
-                
+
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self._send_cors_headers()
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
-            else:
-                self.send_error(400, "Missing payload")
-            return
-            
-        elif path == '/api/edges/create':
-            content_length = int(self.headers.get('Content-Length', 0))
-            if content_length > 0:
-                payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                return
+
+            elif path == '/api/edges/create':
+                payload = self._read_json_body()
+                if not payload:
+                    self.send_error(400, "Missing payload")
+                    return
                 from memory_os.core.models import MemoryEdge
                 edge = MemoryEdge(
                     source=payload.get("source"),
@@ -247,20 +295,19 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
                 )
                 repo = self.server.provider.repo
                 repo.add_edge(edge)
-                
+
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self._send_cors_headers()
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
-            else:
-                self.send_error(400, "Missing payload")
-            return
-            
-        elif path == '/api/nodes/merge':
-            content_length = int(self.headers.get('Content-Length', 0))
-            if content_length > 0:
-                payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                return
+
+            elif path == '/api/nodes/merge':
+                payload = self._read_json_body()
+                if not payload:
+                    self.send_error(400, "Missing payload")
+                    return
                 source_id = payload.get("source") # node to delete
                 target_id = payload.get("target") # node to keep
                 repo = self.server.provider.repo
@@ -302,46 +349,50 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
                         
                 repo.save_nodes(new_nodes)
                 repo.save_edges(unique_edges)
-                
+
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self._send_cors_headers()
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
-            else:
-                self.send_error(400, "Missing payload")
-            return
-        
-        elif path == '/api/link-infer':
-            content_length = int(self.headers.get('Content-Length', 0))
-            payload = json.loads(self.rfile.read(content_length).decode("utf-8")) if content_length else {}
-            method        = payload.get("method", "cascade")
-            resource_mode = payload.get("resource_mode", "quiet")
-            dry_run       = payload.get("dry_run", False)
+                return
 
-            import subprocess, sys as _sys
-            root = str(self.server.provider.config.root_dir)
-            cmd  = [_sys.executable, "-m", "memory_os", "--root", root,
-                    "link-infer", "--method", method, "--resource-mode", resource_mode]
-            if dry_run:
-                cmd.append("--dry-run")
+            elif path == '/api/link-infer':
+                payload = self._read_json_body()
+                method        = payload.get("method", "cascade")
+                resource_mode = payload.get("resource_mode", "quiet")
+                dry_run       = payload.get("dry_run", False)
+                if method not in LINK_INFER_METHODS or resource_mode not in LINK_INFER_RESOURCE_MODES:
+                    self.send_error(400, "Invalid method or resource_mode")
+                    return
 
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-                output = (result.stdout + result.stderr).strip()
-                self._json_response({
-                    "status": "ok" if result.returncode == 0 else "error",
-                    "output": output,
-                    "returncode": result.returncode,
-                })
-            except subprocess.TimeoutExpired:
-                self._json_response({"status": "timeout",
-                                     "output": "Link inference timed out after 180s."})
-            except Exception as exc:
-                self._json_response({"status": "error", "output": str(exc)}, status=500)
-            return
+                import subprocess, sys as _sys
+                root = str(self.server.provider.config.root_dir)
+                cmd  = [_sys.executable, "-m", "memory_os", "--root", root,
+                        "link-infer", "--method", method, "--resource-mode", resource_mode]
+                if dry_run:
+                    cmd.append("--dry-run")
 
-        self.send_error(404, "Not Found")
+                try:
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+                    output = (result.stdout + result.stderr).strip()
+                    self._json_response({
+                        "status": "ok" if result.returncode == 0 else "error",
+                        "output": output,
+                        "returncode": result.returncode,
+                    })
+                except subprocess.TimeoutExpired:
+                    self._json_response({"status": "timeout",
+                                         "output": "Link inference timed out after 180s."})
+                except Exception as exc:
+                    self._json_response({"status": "error", "output": str(exc)}, status=500)
+                return
+
+            self.send_error(404, "Not Found")
+        except ValueError as exc:
+            self.send_error(413, str(exc))
+        except Exception:
+            self.send_error(500, "Internal Server Error")
 
 class MemoryOSServer(HTTPServer):
     def __init__(self, server_address, RequestHandlerClass, provider):

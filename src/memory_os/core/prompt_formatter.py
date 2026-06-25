@@ -5,10 +5,17 @@ Memory OS — Portable Agent Memory Kernel
 
 import re
 from typing import List, Dict, Any
+from xml.sax.saxutils import escape
 
 def wrap_in_xml(tag_name: str, content: str) -> str:
-    """Wraps text content inside strict XML tags."""
-    return f"<{tag_name}>\n{content.strip()}\n</{tag_name}>"
+    """Wraps text content inside strict XML tags.
+
+    Escapes '<', '>', and '&' in content first — otherwise a literal
+    '</tag_name>' inside content (e.g. attacker-controlled transcript text)
+    closes the wrapper early, leaving the rest of content outside it from
+    the model's perspective.
+    """
+    return f"<{tag_name}>\n{escape(content.strip())}\n</{tag_name}>"
 
 def format_user_profile(profile_dict: Dict[str, Any]) -> str:
     """

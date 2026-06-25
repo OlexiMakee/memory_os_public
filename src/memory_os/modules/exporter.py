@@ -2,8 +2,22 @@ import json
 from pathlib import Path
 from typing import List, Optional
 from memory_os.core.logger import get_logger
+from memory_os.core.safe_id import validate_safe_node_id
 
 logger = get_logger(__name__)
+
+
+def _frontmatter_scalar(value: str) -> str:
+    """Collapse a value to one line before placing it inside a YAML-like
+    frontmatter block. A multi-line summary containing an embedded
+    '\\n---' can otherwise terminate the frontmatter block early and turn
+    the remainder of the value into attacker-controlled body/metadata from
+    the consuming tool's (Cursor/Claude) point of view. The full multi-line
+    summary is still written separately in the markdown body, which isn't
+    parsed as structured frontmatter.
+    """
+    return " ".join(str(value).split())
+
 
 class PolyglotExporter:
     """Exports Memory OS nodes to native formats for Cursor, Antigravity, and Claude Code."""
@@ -24,6 +38,16 @@ class PolyglotExporter:
         if node_type not in skill_types:
             return
 
+        try:
+            validate_safe_node_id(node_id)
+        except ValueError as exc:
+            # Defense in depth: EvolutionGate/MemoryValidator should already
+            # reject this upstream, but a node_id this unsafe would otherwise
+            # let exported files land outside their intended directory
+            # (e.g. ".claude/skills/../../AGENTS.md").
+            logger.error(f"Refusing to export node with unsafe id {node_id!r}: {exc}")
+            return
+
         self._export_to_cursor(node_id, summary, globs)
         self._export_to_antigravity(node_id, summary, evidence)
         self._export_to_claude(node_id, node_type, summary, evidence)
@@ -40,10 +64,10 @@ class PolyglotExporter:
             
             lines = [
                 "---",
-                f"description: {summary}"
+                f"description: {_frontmatter_scalar(summary)}"
             ]
             if globs_str:
-                lines.append(f"globs: {globs_str}")
+                lines.append(f"globs: {_frontmatter_scalar(globs_str)}")
             lines.append(f"alwaysApply: {always_apply}")
             lines.append("---")
             lines.append("")
@@ -104,8 +128,8 @@ class PolyglotExporter:
             
             lines = [
                 "---",
-                f"name: {node_id}",
-                f"description: {summary}",
+                f"name: {_frontmatter_scalar(node_id)}",
+                f"description: {_frontmatter_scalar(summary)}",
                 "---",
                 f"# {node_id}",
                 "",

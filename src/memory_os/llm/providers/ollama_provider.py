@@ -1,6 +1,8 @@
 import time
 from typing import Optional
 
+from memory_os.core.safe_id import validate_outbound_base_url
+
 from ..base import LLMProvider
 from ..types import LLMRequest, LLMResponse
 
@@ -12,10 +14,11 @@ except ImportError:
 class OllamaProvider(LLMProvider):
     name = "ollama"
 
-    def __init__(self, host: str = "http://localhost:11434", keep_alive: str = "30m"):
+    def __init__(self, host: str = "http://localhost:11434", keep_alive: str = "30m", timeout: float = 60.0):
         if ollama is None:
             raise ImportError("ollama package is required for OllamaProvider")
-        self.client = ollama.Client(host=host)
+        validate_outbound_base_url(host, "host")
+        self.client = ollama.Client(host=host, timeout=timeout)
         self.keep_alive = keep_alive
 
     def generate(self, request: LLMRequest) -> LLMResponse:

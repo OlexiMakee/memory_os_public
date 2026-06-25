@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Iterable, Optional, Set, Tuple
 from memory_os.core.interfaces import IMemoryOSConfig, IMemoryStorage
 from memory_os.core.repository import MemoryRepository
 from memory_os.core.config import MemoryOSConfig
+from memory_os.core.safe_id import validate_safe_node_id
 from memory_os.core.storage import FileSystemMemoryStorage
 
 
@@ -135,10 +136,18 @@ class EvolutionGate:
         for field_name in ("id", "type", "summary", "evidence"):
             if not node.get(field_name):
                 return False, f"missing or empty required field '{field_name}'"
+        if not isinstance(node["id"], str):
+            return False, "id must be a string"
+        try:
+            validate_safe_node_id(node["id"])
+        except ValueError as exc:
+            return False, str(exc)
+        if not isinstance(node["summary"], str):
+            return False, "summary must be a string"
         if node["type"] not in VALID_NODE_TYPES:
             return False, f"invalid type '{node['type']}' — must be one of {sorted(VALID_NODE_TYPES)}"
-        if not isinstance(node["evidence"], list):
-            return False, "evidence must be a list"
+        if not isinstance(node["evidence"], list) or not all(isinstance(e, str) for e in node["evidence"]):
+            return False, "evidence must be a list of strings"
         return True, ""
 
     def _quality_check(self, node: Dict[str, Any]) -> Tuple[bool, str]:
@@ -255,6 +264,17 @@ class MemoryValidator:
 
             if not node_ok:
                 continue
+
+            if not isinstance(node["id"], str):
+                errors.append(f"nodes.jsonl:L{line_num} 'id' must be a string")
+            else:
+                try:
+                    validate_safe_node_id(node["id"])
+                except ValueError as exc:
+                    errors.append(f"nodes.jsonl:L{line_num} {exc}")
+
+            if not isinstance(node["summary"], str):
+                errors.append(f"nodes.jsonl:L{line_num} 'summary' must be a string")
 
             if node["type"] not in valid_types:
                 errors.append(f"nodes.jsonl:L{line_num} invalid type '{node['type']}'")

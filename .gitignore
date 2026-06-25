@@ -11,6 +11,9 @@ build/
 # OS
 .DS_Store
 
+# Stray root-level SQLite artifact (unreferenced by code; not data/ or memory/)
+/.memory_os_repo.db
+
 # Runtime state
 data/
 memory/

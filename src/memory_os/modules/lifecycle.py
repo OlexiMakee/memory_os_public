@@ -9,6 +9,7 @@ from typing import List, Dict, Set, Any, Tuple, Optional
 from memory_os.core.interfaces import IMemoryOSConfig, IMemoryStorage
 from memory_os.core.repository import MemoryRepository
 from memory_os.core.config import MemoryOSConfig
+from memory_os.core.safe_id import validate_safe_node_id
 from memory_os.core.storage import FileSystemMemoryStorage
 
 class LifecycleManager:
@@ -183,10 +184,21 @@ class LifecycleManager:
         return 0
 
     def _emit_skill_file(self, node: Dict[str, Any]) -> None:
+        try:
+            validate_safe_node_id(node["id"])
+        except ValueError as exc:
+            # Defense in depth: a node this unsafe should already be rejected
+            # by EvolutionGate/MemoryValidator, but skip rather than write
+            # outside .claude/skills/ if one slips through.
+            logger.error(f"Refusing to emit skill file for unsafe node id {node.get('id')!r}: {exc}")
+            return
         skills_dir = self.config.root_dir / ".claude" / "skills"
         skills_dir.mkdir(parents=True, exist_ok=True)
         skill_path = skills_dir / f"{node['id']}.md"
-        lines = [f"# {node['id']}", "", node.get("summary", ""), ""]
+        summary = node.get("summary", "")
+        if not isinstance(summary, str):
+            summary = str(summary)
+        lines = [f"# {node['id']}", "", summary, ""]
         evidence = node.get("evidence", [])
         if evidence:
             lines += ["**Evidence:**"] + [f"- {ev}" for ev in evidence] + [""]

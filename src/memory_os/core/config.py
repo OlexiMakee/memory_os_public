@@ -4,12 +4,13 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from memory_os.core.interfaces import IMemoryOSConfig
+from memory_os.core.safe_id import confine_to_root, validate_safe_id
 
 class MemoryOSConfig(IMemoryOSConfig):
     """Manages the configuration and paths for Memory OS."""
 
     def __init__(self, config_path: Optional[str] = None, space: str = "default"):
-        self.space = space
+        self.space = validate_safe_id(space, "space")
         # 1. Resolve config file path: parameter -> env var -> default project root
         if config_path:
             self.config_path = Path(config_path).resolve()
@@ -54,7 +55,7 @@ class MemoryOSConfig(IMemoryOSConfig):
     @property
     def memory_dir(self) -> Path:
         val = self.data.get("memory_dir", "memory")
-        base = (self.root_dir / val).resolve()
+        base = confine_to_root(val, self.root_dir)
         if self.space == "default":
             return base
         return (base / self.space).resolve()
@@ -71,20 +72,20 @@ class MemoryOSConfig(IMemoryOSConfig):
     def capsules_file(self) -> Path:
         if self.space == "default":
             val = self.data.get("capsules_file", "agent_context/task_capsules.jsonl")
-            return (self.root_dir / val).resolve()
+            return confine_to_root(val, self.root_dir)
         return self.memory_dir / "task_capsules.jsonl"
 
     @property
     def snapshot_file(self) -> Path:
         if self.space == "default":
             val = self.data.get("snapshot_file", "agent_context/memory_snapshot.json")
-            return (self.root_dir / val).resolve()
+            return confine_to_root(val, self.root_dir)
         return self.memory_dir / "memory_snapshot.json"
 
     @property
     def proposals_file(self) -> Path:
         val = self.data.get("proposals_file", "agent_proposals/admin_proposals.jsonl")
-        return (self.root_dir / val).resolve()
+        return confine_to_root(val, self.root_dir)
 
     @property
     def workflows(self) -> List[str]:
@@ -102,7 +103,7 @@ class MemoryOSConfig(IMemoryOSConfig):
     def db_path(self) -> Path:
         if self.space == "default":
             val = self.data.get("db_path", "memory/memory_os.db")
-            return (self.root_dir / val).resolve()
+            return confine_to_root(val, self.root_dir)
         return self.memory_dir / "memory_os.db"
 
     @property

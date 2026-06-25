@@ -26,7 +26,15 @@ class ContextRegistry:
         """Redact potential secrets and credentials from index files."""
         secret_patterns = (
             re.compile(r"sk-[A-Za-z0-9_\-]{12,}"),
-            re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?[^\s'\"',}]+"),
+            # Quoted values are matched in full (so multi-word secrets like
+            # api_key = "super secret value" don't leak everything after the
+            # first space); unquoted values fall back to a single token.
+            # The keyword list also covers common non-"api_key" names like
+            # stripe_key, github_pat, db_password.
+            re.compile(
+                r"(?i)[\w-]*(?:api[_-]?key|token|secret|password|credential|pat|key)[\w-]*"
+                r"\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,'\"}]+)"
+            ),
             re.compile(r"postgresql://[^\s'\"]+"),
         )
         redacted = text
@@ -56,6 +64,12 @@ class ContextRegistry:
         """Iterate files traversing directories recursively."""
         for item in paths:
             base = (self.root_dir / item).resolve()
+            try:
+                base.relative_to(self.root_dir)
+            except ValueError:
+                # item was an absolute path or used '..' to escape root_dir;
+                # skip rather than read/disclose files outside the project.
+                continue
             if not base.exists():
                 continue
             candidates = [base] if base.is_file() else base.rglob("*")

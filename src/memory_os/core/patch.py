@@ -24,6 +24,24 @@ class RelationPatch:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     status: str = "pending"  # pending, applied, rejected, rolled_back
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RelationPatch":
+        return cls(
+            operation=data.get("operation", ""),
+            source=data.get("source", ""),
+            target=data.get("target", ""),
+            type=data.get("type", ""),
+            domain=data.get("domain", ""),
+            confidence=float(data.get("confidence", 0.0) or 0.0),
+            evidence=data.get("evidence", []),
+            reason=data.get("reason", ""),
+            created_by_protocol=int(data.get("created_by_protocol", 0) or 0),
+            required_verification_protocol=int(data.get("required_verification_protocol", 0) or 0),
+            payload=data.get("payload", {}),
+            id=data.get("id") or str(uuid.uuid4()),
+            status=data.get("status", "pending")
+        )
+
 
 _EDGE_OPERATIONS = {"upsert_edge", "delete_edge_soft"}
 _NODE_OPERATIONS = {"upsert_node", "deprecate_node"}
@@ -36,7 +54,7 @@ class RelationPatchStore:
         self.repository = repository
         # registry is a RelationContractRegistry; if None, contract checks are skipped.
         self.registry = registry
-        self._patches: Dict[str, RelationPatch] = {}
+        self._patches: Dict[str, RelationPatch] = {p.id: p for p in repository.get_patches()}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -132,6 +150,19 @@ class RelationPatchStore:
                 trust="verified" if patch.confidence > 0.8 else "unverified",
             )
             self.repository._add_node(node)
+        elif patch.operation == "delete_edge_soft":
+            edges = self.repository.get_edges()
+            new_edges = [
+                e for e in edges
+                if not (e.source == patch.source and e.target == patch.target and e.type == patch.type)
+            ]
+            self.repository._save_edges(new_edges)
+        elif patch.operation == "deprecate_node":
+            nodes = self.repository.get_nodes()
+            for node in nodes:
+                if node.id == patch.target:
+                    node.status = "stale"
+            self.repository._save_nodes(nodes)
 
         patch.status = "applied"
         self.repository.save_patch(patch)
