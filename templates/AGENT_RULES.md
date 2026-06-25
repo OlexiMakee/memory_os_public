@@ -33,5 +33,5 @@ Do NOT trust the checkbox alone. The handshake can go stale or contain optimisti
 
 ## Token-Budget And Step Tiers
 - Step scale: 1–12 (`nano` → `giant`).
-- Accept triggers like `product 7`, `memos tiny`, `giant steps`.
+- Accept triggers like `product 7`, `memory tiny`, `giant steps`.
 - Adjust response density, edit scope, and autonomy to the declared tier.
