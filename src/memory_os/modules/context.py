@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from memory_os.core.adapters import CodebaseDomainAdapter
+from memory_os.core.file_policy import classify_private_path, load_export_ignore_patterns
 
 class ContextRegistry:
     """Standalone developer memory indexing engine. Builds compact context snapshots."""
@@ -60,7 +61,13 @@ class ContextRegistry:
             return "telemetry-layer"
         return "domain-layer"
 
-    def iter_files(self, paths: Iterable[str], include_telemetry: bool, excluded_dirs: set, text_suffixes: set) -> Iterable[Path]:
+    def iter_files(
+        self,
+        paths: Iterable[str],
+        include_telemetry: bool,
+        excluded_dirs: set,
+        text_suffixes: set,
+    ) -> Iterable[Path]:
         """Iterate files traversing directories recursively."""
         for item in paths:
             base = (self.root_dir / item).resolve()
@@ -128,7 +135,8 @@ class ContextRegistry:
         include_telemetry: bool = False,
         max_items: int = 160,
         max_file_bytes: int = 220000,
-        max_preview_chars: int = 360
+        max_preview_chars: int = 360,
+        exclude_private: bool = False,
     ) -> Dict[str, Any]:
         """Generate structured context nodes list."""
         excluded_dirs = {".git", ".tmp.driveupload", ".venv", "venv", "venv_auto", "node_modules", "__pycache__", ".pytest_cache", "data"}
@@ -136,10 +144,28 @@ class ContextRegistry:
 
         items = []
         skipped = []
-        for path in self.iter_files(paths, include_telemetry, excluded_dirs, text_suffixes):
+        export_ignore_patterns = load_export_ignore_patterns(self.root_dir) if exclude_private else []
+        for path in self.iter_files(
+            paths,
+            include_telemetry,
+            excluded_dirs,
+            text_suffixes,
+        ):
             try:
+                rel_path = self.rel(path)
+                if exclude_private:
+                    private_reason = classify_private_path(
+                        rel_path,
+                        export_ignore_patterns=export_ignore_patterns,
+                    )
+                    if private_reason:
+                        skipped.append({
+                            "file": rel_path if private_reason == "secret-policy" else "[private]",
+                            "reason": private_reason,
+                        })
+                        continue
                 if path.stat().st_size > max_file_bytes:
-                    skipped.append({"file": self.rel(path), "reason": "too-large"})
+                    skipped.append({"file": rel_path, "reason": "too-large"})
                     continue
                 text = path.read_text(encoding="utf-8", errors="ignore")
             except Exception as e:

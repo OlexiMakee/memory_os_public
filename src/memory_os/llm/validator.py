@@ -1,8 +1,7 @@
 import json
-from typing import TypeVar, Type, Optional, Any
-from pydantic import BaseModel, ValidationError
+from typing import Any, Optional, Type, TypeVar
 
-T = TypeVar('T', bound=BaseModel)
+T = TypeVar('T')
 
 class LLMResponseValidator:
     """Validates and parses JSON strings from LLM responses into Pydantic models."""
@@ -14,6 +13,10 @@ class LLMResponseValidator:
         clean_raw = LLMResponseValidator._strip_markdown(raw)
         
         try:
+            try:
+                from pydantic import ValidationError
+            except ImportError:
+                ValidationError = ValueError
             data = json.loads(clean_raw)
             return model_class(**data)
         except (json.JSONDecodeError, ValidationError) as e:

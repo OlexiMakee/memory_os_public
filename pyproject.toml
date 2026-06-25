@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Portable agent Memory OS kernel — graph memory, telemetry, lifecycle, compaction, search."
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["ollama>=0.1.0", "openai>=1.0.0", "pydantic>=2.0.0", "psutil>=5.9.0"]
+dependencies = []
 
 [project.scripts]
 memory_os = "memory_os.cli:main"
@@ -13,8 +13,12 @@ memory_os = "memory_os.cli:main"
 # When used inside this host project — LLMClientFactory is resolved automatically.
 # When portable — set GEMINI_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY in env.
 dev = ["pytest"]
+providers-ollama = ["ollama>=0.1.0"]
+providers-openai = ["openai>=1.0.0"]
+resource-psutil = ["psutil>=5.9.0"]
+validation-pydantic = ["pydantic>=2.0.0"]
 
-# Optional adapters (see DEV_STRATEGY.md Stage 13/14 and `memory_os adapters audit`).
+# Optional adapters (see `memory_os adapters audit`).
 # None of these are required for core/toolkit commands; each adapter lazy-imports its
 # package and degrades to {"ok": False, "detail": "... not installed"} when absent.
 adapters-litellm = ["litellm"]
@@ -27,6 +31,24 @@ adapters-langfuse = ["langfuse"]
 adapters-mlflow = ["mlflow"]
 adapters-pydantic-ai = ["pydantic-ai"]
 adapters-mcp = ["mcp"]
+adapters-vllm = ["openai>=1.0.0"]
+all = [
+    "ollama>=0.1.0",
+    "openai>=1.0.0",
+    "psutil>=5.9.0",
+    "pydantic>=2.0.0",
+    "litellm",
+    "markitdown",
+    "duckdb",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "qdrant-client",
+    "arize-phoenix",
+    "langfuse",
+    "mlflow",
+    "pydantic-ai",
+    "mcp",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]

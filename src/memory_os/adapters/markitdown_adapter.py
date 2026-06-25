@@ -6,7 +6,10 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
+
+from memory_os.core.safe_id import confine_to_root
 
 
 def is_available() -> bool:
@@ -20,13 +23,21 @@ class MarkItDownAdapter:
     def __init__(self) -> None:
         pass
 
-    def convert(self, path: str, dry_run: bool = True) -> Dict[str, Any]:
+    def convert(
+        self,
+        path: str,
+        dry_run: bool = True,
+        allowed_root: Optional[Union[str, Path]] = None,
+        allow_outside_root: bool = False,
+    ) -> Dict[str, Any]:
         """Convert a local file to Markdown.
 
         Validates that the file exists, computes the SHA-256 hash of the content,
         and uses markitdown to convert the content to Markdown text.
         """
         try:
+            if allowed_root is not None and not allow_outside_root:
+                path = str(confine_to_root(path, Path(allowed_root)))
             return self._convert(path, dry_run)
         except Exception as e:
             # Catches argument-validation errors (e.g. a non-string path raising

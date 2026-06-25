@@ -22,6 +22,7 @@ dummy_transcript.jsonl
 agent_context/memory_snapshot.json
 agent_context/task_capsules.jsonl
 agent_context/transcript.jsonl
+agent_context/memos_extract_os*/
 
 # Local dev
 scratch.py

@@ -9,6 +9,7 @@ providers, compaction, or UI — see DEV_STRATEGY.md Stage 1.
 from __future__ import annotations
 
 import json
+import sqlite3
 import shutil
 import time
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ DEFAULT_RESOURCES_CONFIG: Dict[str, float] = {
     "min_free_disk_mb": 2048,
     "max_sqlite_db_mb": 256,
     "max_sqlite_wal_mb": 64,
+    "max_jsonl_total_mb": 128,
     "max_observed_growth_mb_per_hour": 128,
 }
 
@@ -53,12 +55,19 @@ class DiskSnapshot:
     sqlite: SQLiteFileHealth
     growth_mb_per_hour: Optional[float]
     low_disk: bool
+    exceeds_max_jsonl: bool
     growth_alert: bool
 
     @property
     def level(self) -> str:
         """'cool' | 'hot' — any configured threshold breached means 'hot'."""
-        if self.low_disk or self.sqlite.exceeds_max_db or self.sqlite.exceeds_max_wal or self.growth_alert:
+        if (
+            self.low_disk
+            or self.sqlite.exceeds_max_db
+            or self.sqlite.exceeds_max_wal
+            or self.exceeds_max_jsonl
+            or self.growth_alert
+        ):
             return "hot"
         return "cool"
 
@@ -70,6 +79,7 @@ class DiskSnapshot:
             "sqlite": self.sqlite.to_dict(),
             "growth_mb_per_hour": self.growth_mb_per_hour,
             "low_disk": self.low_disk,
+            "exceeds_max_jsonl": self.exceeds_max_jsonl,
             "growth_alert": self.growth_alert,
             "level": self.level,
         }
@@ -166,6 +176,7 @@ class DiskGuard:
 
         free_disk_mb = self._free_disk_mb()
         low_disk = free_disk_mb < self.settings["min_free_disk_mb"]
+        exceeds_max_jsonl = jsonl_mb > self.settings["max_jsonl_total_mb"]
         growth_alert = bool(
             growth_mb_per_hour is not None
             and growth_mb_per_hour > self.settings["max_observed_growth_mb_per_hour"]
@@ -178,7 +189,53 @@ class DiskGuard:
             sqlite=sqlite,
             growth_mb_per_hour=growth_mb_per_hour,
             low_disk=low_disk,
+            exceeds_max_jsonl=exceeds_max_jsonl,
             growth_alert=growth_alert,
         )
         self._save_state(now, tracked_mb, growth_mb_per_hour)
         return result
+
+    def checkpoint_sqlite(self, truncate: bool = True, dry_run: bool = False) -> Dict[str, Any]:
+        """Checkpoint the SQLite WAL without touching graph JSONL files."""
+        before = self._sqlite_health()
+        if dry_run:
+            return {
+                "ok": True,
+                "dry_run": True,
+                "action": "wal_checkpoint_truncate" if truncate else "wal_checkpoint",
+                "before": before.to_dict(),
+            }
+
+        db_path = self.config.db_path
+        if not db_path.exists():
+            return {"ok": False, "detail": "sqlite db not found", "before": before.to_dict()}
+
+        try:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                pragma = "wal_checkpoint(TRUNCATE)" if truncate else "wal_checkpoint(FULL)"
+                rows = conn.execute(f"PRAGMA {pragma}").fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            return {"ok": False, "detail": f"checkpoint failed: {exc}", "before": before.to_dict()}
+
+        after = self._sqlite_health()
+        return {
+            "ok": True,
+            "dry_run": False,
+            "action": "wal_checkpoint_truncate" if truncate else "wal_checkpoint",
+            "before": before.to_dict(),
+            "after": after.to_dict(),
+            "sqlite_result": [list(row) for row in rows],
+        }
+
+    def compact(self, dry_run: bool = False) -> Dict[str, Any]:
+        """Run bounded local resource compaction actions."""
+        checkpoint = self.checkpoint_sqlite(truncate=True, dry_run=dry_run)
+        return {
+            "ok": bool(checkpoint.get("ok")),
+            "dry_run": dry_run,
+            "checkpoint": checkpoint,
+            "snapshot": self.snapshot().to_dict(),
+        }

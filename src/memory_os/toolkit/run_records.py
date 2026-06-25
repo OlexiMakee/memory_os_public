@@ -17,6 +17,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from memory_os.core.config import MemoryOSConfig
 from memory_os.core.safe_id import validate_safe_id
+from memory_os.core.write_budget import ArtifactWriteBudget
 
 MAX_CHECKPOINTS = 200
 VALID_STATUSES = {"running", "completed", "failed", "aborted"}
@@ -77,7 +78,7 @@ class RunRecordStore:
         path = self.record_path(record["run_id"])
         path.parent.mkdir(parents=True, exist_ok=True)
         record["updated_at"] = _now()
-        path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        ArtifactWriteBudget(self.config).write_text(path, json.dumps(record, indent=2) + "\n", encoding="utf-8")
 
     def start(self, workflow_name: str, inputs: Optional[Dict] = None) -> Dict[str, Any]:
         run_id = f"{_run_id_prefix(workflow_name)}-{uuid.uuid4().hex[:8]}"

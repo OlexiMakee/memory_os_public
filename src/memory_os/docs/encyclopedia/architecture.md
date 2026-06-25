@@ -8,7 +8,7 @@
 
 ## 1. Концепція Dependency Inversion
 
-Всі абстрактні класи та контракти винесені в єдиний файл: [interfaces.py](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/interfaces.py). 
+Всі абстрактні класи та контракти винесені в єдиний файл: [interfaces.py](src/memory_os/core/interfaces.py).
 
 ```mermaid
 graph TD
@@ -33,26 +33,26 @@ graph TD
 
 ## 2. Ключові інтерфейси
 
-### [IMemoryOSConfig](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/interfaces.py#L6)
+### [IMemoryOSConfig](src/memory_os/core/interfaces.py#L6)
 Окреслює конфігураційні властивості ядра. Дозволяє зчитувати налаштування з JSON-файлів, змінних оточення чи віддаленого конфіг-сервера.
 * Ключові властивості: `memory_dir`, `capsules_file`, `snapshot_file`, `db_path`, `workflows`, `resource_mode`.
-* Стандартна реалізація: [MemoryOSConfig](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/config.py#L8) (зчитує `memory_os.config.json` або застосовує дефолтний профіль `developer`).
+* Стандартна реалізація: [MemoryOSConfig](src/memory_os/core/config.py#L8) (зчитує `memory_os.config.json` або застосовує дефолтний профіль `developer`).
 
-### [IMemoryStorage](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/interfaces.py#L23)
+### [IMemoryStorage](src/memory_os/core/interfaces.py#L23)
 Абстрагує операції читання/запису.
 * Ключові методи: `load_jsonl`, `save_jsonl`, `append_jsonl`, `load_json`, `save_json`, `exists`, `get_sha256`.
-* Стандартна реалізація: [FileSystemMemoryStorage](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/storage.py#L7) (використовує вбудовані функції роботи з файлами Python).
+* Стандартна реалізація: [FileSystemMemoryStorage](src/memory_os/core/storage.py#L7) (використовує вбудовані функції роботи з файлами Python).
 
-### [ILlmProviderService](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/interfaces.py#L42)
+### [ILlmProviderService](src/memory_os/core/interfaces.py#L42)
 Абстрагує виклики до мовних моделей. Захищає ядро від прив'язки до SDK конкретного провайдера (наприклад, `google-generativeai` чи `openai`).
 * Ключовий метод: `call_llm(user_message, system_prompt, provider, model)`.
-* Стандартна реалізація: [DefaultLlmProviderService](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/llm_service.py#L69).
+* Стандартна реалізація: [DefaultLlmProviderService](src/memory_os/core/llm_service.py#L69).
 
 ---
 
 ## 3. Ліниве розширення та резолюція провайдерів LLM
 
-Клас [DefaultLlmProviderService](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/llm_service.py#L69) реалізує каскадний алгоритм вибору провайдера LLM (LLM Resolution Cascade). Це дозволяє використовувати хост-адаптери або автоматично перемикатися на прямі запити.
+Клас [DefaultLlmProviderService](src/memory_os/core/llm_service.py#L69) реалізує каскадний алгоритм вибору провайдера LLM (LLM Resolution Cascade). Це дозволяє використовувати хост-адаптери або автоматично перемикатися на прямі запити.
 
 ### Алгоритм роботи:
 1. **Спроба завантаження хост-клієнта**:
@@ -85,7 +85,7 @@ with urllib.request.urlopen(req, timeout=60) as resp:
 
 ## 4. Потокобезпека та підключення до БД
 
-Для логування телеметрії та швидкодії алгоритмів Memory OS використовує вбудовану базу даних SQLite. Оскільки AI-агенти можуть працювати в асинхронних потоках, підключення реалізовано за допомогою thread-safe паттерну в класі [MemoryOS](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/core.py#L8):
-* З'єднання відкривається локально всередині кожного методу через [get_connection()](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/core.py#L25) та гарантовано закривається в блоці `finally`.
+Для логування телеметрії та швидкодії алгоритмів Memory OS використовує вбудовану базу даних SQLite. Оскільки AI-агенти можуть працювати в асинхронних потоках, підключення реалізовано за допомогою thread-safe паттерну в класі [MemoryOS](src/memory_os/core/core.py#L8):
+* З'єднання відкривається локально всередині кожного методу через [get_connection()](src/memory_os/core/core.py#L25) та гарантовано закривається в блоці `finally`.
 * Застосовано `PRAGMA foreign_keys = ON` для контролю зв'язків.
-* База даних ініціалізується автоматично при першому старті через метод [init_db()](file:///Users/oleksii/Documents/memory_os/src/memory_os/core/core.py#L32), що виключає необхідність попереднього запуску міграцій розробником.
+* База даних ініціалізується автоматично при першому старті через метод [init_db()](src/memory_os/core/core.py#L32), що виключає необхідність попереднього запуску міграцій розробником.

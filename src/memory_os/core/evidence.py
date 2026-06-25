@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from memory_os.core.config import MemoryOSConfig
 from memory_os.core.safe_id import validate_safe_id
+from memory_os.core.write_budget import ArtifactWriteBudget
 from memory_os.modules.context import ContextRegistry
 
 MAX_OUTPUT_CHARS = 4000
@@ -59,7 +60,7 @@ class EvidenceStore:
         except OSError:
             pass
         bundle["updated_at"] = _now()
-        path.write_text(json.dumps(bundle, indent=2) + "\n", encoding="utf-8")
+        ArtifactWriteBudget(self.config).write_text(path, json.dumps(bundle, indent=2) + "\n", encoding="utf-8")
         try:
             path.chmod(0o600)
         except OSError:

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from memory_os.core.config import MemoryOSConfig
+from memory_os.core.file_policy import classify_private_path, load_export_ignore_patterns
 from memory_os.core.safe_id import confine_to_root
 from memory_os.modules.context import ContextRegistry
 from memory_os.modules.search import MemorySearcher
@@ -27,6 +28,7 @@ class ContextPackBuilder:
         contract_path: Optional[str] = None,
         paths: Optional[List[str]] = None,
         max_total_tokens: Optional[int] = DEFAULT_MAX_TOTAL_TOKENS,
+        include_private: bool = False,
     ) -> Dict[str, Any]:
         """Builds a context pack for the given task and configuration.
 
@@ -68,7 +70,8 @@ class ContextPackBuilder:
 
         # 2. Collect Candidates
         registry = ContextRegistry(str(self.config.root_dir))
-        snapshot = registry.build_snapshot(paths=paths)
+        export_ignore_patterns = load_export_ignore_patterns(self.config.root_dir)
+        snapshot = registry.build_snapshot(paths=paths, exclude_private=not include_private)
 
         # 3. Analyze and Sort Files (secret guard + relevance)
         relevant_files = []
@@ -77,21 +80,32 @@ class ContextPackBuilder:
         # Keywords for relevance scoring
         keywords = [w for w in re.findall(r"\w+", keyword_source.lower()) if len(w) >= 2]
 
+        for skipped in snapshot.get("skipped", []):
+            excluded_noise.append(
+                {
+                    "file": skipped.get("file", ""),
+                    "reason": skipped.get("reason", "skipped"),
+                    "token_estimate": 0,
+                }
+            )
+
         for item in snapshot.get("items", []):
             meta = item.get("meta", {})
             filepath = meta.get("file", "")
             filepath_lower = filepath.lower()
 
-            # Skip files whose path contains ".env", "secret", or "credential"
-            if (
-                ".env" in filepath_lower
-                or "secret" in filepath_lower
-                or "credential" in filepath_lower
-            ):
+            policy_reason = None
+            if not include_private:
+                policy_reason = classify_private_path(
+                    filepath,
+                    export_ignore_patterns=export_ignore_patterns,
+                )
+
+            if policy_reason:
                 excluded_noise.append(
                     {
                         "file": filepath,
-                        "reason": "secret-policy",
+                        "reason": policy_reason,
                         "token_estimate": 0,
                     }
                 )

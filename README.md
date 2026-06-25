@@ -76,8 +76,9 @@ The engineering control plane turns a vague request into a verified result: idea
 | `review-pack --task <id>` | Assemble contract, context pack, and evidence into one reviewer-facing document |
 | `change-size` | Warn when a change touches too many files or mixes source with generated artifacts |
 | `eval list/run/compare` | Run local-deterministic and optional LLM-judge eval suites for nondeterministic behavior |
-| `security scan` | Scan local memory stores for secrets and prompt-injection markers |
-| `resources` / `telemetry audit` | Check disk, SQLite WAL, JSONL, and bounded-telemetry health |
+| `security scan --profile <profile>` | Scan local memory, private docs, context artifacts, or docs for secrets and injection markers |
+| `resources snapshot/checkpoint/compact` / `telemetry audit/prune` | Check and bound disk, SQLite WAL, JSONL, and telemetry growth |
+| `release-check --target private/public` | Run deterministic local gates before publishing |
 | `route --task "..."` / `budget status` | Show provider/model routing and current token budget status without a network call |
 | `prompt list/show/render` | Inspect versioned, hashed prompt templates without an LLM call |
 | `adapters audit` | Check which optional adapters are installed; none are required by default |
@@ -111,6 +112,16 @@ agent completes task
 
 ## Environment variables
 
+The base package has no mandatory third-party runtime dependencies. Provider SDKs
+and heavier tooling are installed through extras, for example:
+
+```bash
+pip install "memory_os[providers-ollama]"
+pip install "memory_os[providers-openai]"
+pip install "memory_os[resource-psutil]"
+pip install "memory_os[all]"
+```
+
 Create a `.env` in your project root:
 
 ```bash
@@ -121,6 +132,8 @@ GEMINI_API_KEY=...          # alternative provider
 
 LLM operations (`compact`, `compress`, `giant-scan`) require at least one key.
 `init`, `validate`, `sync`, `search`, `review`, `approve`, `triage`, `query`, `backlinks` work offline.
+
+`python3 test_auto.py` runs against an isolated temporary Memory OS workspace by default. Use `python3 test_auto.py --live-smoke` only when intentionally testing the current checkout's live runtime state.
 
 ## Agent integration
 
@@ -133,8 +146,8 @@ Run `memory_os search "<topic>"` before starting any task.
 For non-trivial feature work, run `memory_os spec init "<title>"` and keep spec/plan/tasks traceable.
 After completing a task, append a capsule to `agent_context/task_capsules.jsonl`.
 Run `memory_os sync` after any memory update.
-Run `memory_os check-updates` periodically to find the upstream repository URL.
-If using the `public` version, downstream agents are FORBIDDEN from accessing the `main` branch. DO NOT modify the local package directly; instead, propose features or bug-fixes for the upstream repository.
+Run `memory_os check-updates` periodically to find the public repository URL.
+For public-facing work, use the public repository's normal issue/PR flow. Keep private planning files such as `DEV_STRATEGY.md` and `agent_context/IMPORTANT_PROPOSAL.md` on private remotes only.
 ```
 
 ## Templates

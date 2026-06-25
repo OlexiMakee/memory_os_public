@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from memory_os.core.config import MemoryOSConfig
+from memory_os.core.file_policy import unique_existing_files
 
 # Regex patterns for detecting secrets
 RE_PRIVATE_KEY = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----")
@@ -52,15 +53,20 @@ def is_placeholder(val: str) -> bool:
 class SecurityScanner:
     """Offline security scanner for Memory OS local stores."""
 
+    VALID_PROFILES = {"default", "private-docs", "context-artifacts", "docs", "all"}
+
     def __init__(self, config: MemoryOSConfig):
         self.config = config
 
-    def scan(self) -> Dict[str, Any]:
+    def scan(self, profile: str = "default") -> Dict[str, Any]:
         """Scan local-first stores for secret leakage and prompt-injection markers."""
+        if profile not in self.VALID_PROFILES:
+            raise ValueError(f"unsupported security scan profile: {profile}")
+
         scanned_files: List[str] = []
         findings: List[Dict[str, Any]] = []
 
-        files_to_scan = self._collect_files()
+        files_to_scan = self._collect_files(profile=profile)
 
         for file_path in files_to_scan:
             try:
@@ -97,42 +103,75 @@ class SecurityScanner:
 
         return {
             "scanned_files": scanned_files,
+            "profile": profile,
             "findings": unique_findings,
             "secret_count": secret_count,
             "injection_marker_count": injection_marker_count
         }
 
-    def _collect_files(self) -> List[Path]:
+    def _collect_files(self, profile: str = "default") -> List[Path]:
         files: List[Path] = []
         root = self.config.root_dir
 
-        # 1. memory/*.jsonl
-        memory_dir = root / "memory"
-        if memory_dir.is_dir():
-            for p in memory_dir.glob("*.jsonl"):
+        def add_default() -> None:
+            memory_dir = root / "memory"
+            if memory_dir.is_dir():
+                files.extend(p for p in memory_dir.glob("*.jsonl") if p.is_file())
+
+            capsules_file = root / "agent_context" / "task_capsules.jsonl"
+            if capsules_file.is_file():
+                files.append(capsules_file)
+
+            evidence_dir = root / "agent_context" / "evidence"
+            if evidence_dir.is_dir():
+                files.extend(p for p in evidence_dir.glob("**/bundle.json") if p.is_file())
+
+            packs_dir = root / "agent_context" / "context_packs"
+            if packs_dir.is_dir():
+                files.extend(p for p in packs_dir.glob("**/pack.json") if p.is_file())
+
+        def add_private_docs() -> None:
+            for rel in ("DEV_STRATEGY.md", "agent_context/IMPORTANT_PROPOSAL.md"):
+                p = root / rel
                 if p.is_file():
                     files.append(p)
+            agent_context = root / "agent_context"
+            if agent_context.is_dir():
+                files.extend(p for p in agent_context.glob("**/*.md") if p.is_file())
 
-        # 2. agent_context/task_capsules.jsonl
-        capsules_file = root / "agent_context" / "task_capsules.jsonl"
-        if capsules_file.is_file():
-            files.append(capsules_file)
+        def add_context_artifacts() -> None:
+            agent_context = root / "agent_context"
+            if agent_context.is_dir():
+                for pattern in (
+                    "context_packs/**/*.json",
+                    "context_packs/**/*.md",
+                    "evidence/**/*.json",
+                    "evidence/**/*.md",
+                    "review_packs/**/*.json",
+                    "review_packs/**/*.md",
+                ):
+                    files.extend(p for p in agent_context.glob(pattern) if p.is_file())
 
-        # 3. agent_context/evidence/**/bundle.json
-        evidence_dir = root / "agent_context" / "evidence"
-        if evidence_dir.is_dir():
-            for p in evidence_dir.glob("**/bundle.json"):
+        def add_docs() -> None:
+            for rel in ("README.md", "INDEX.md"):
+                p = root / rel
                 if p.is_file():
                     files.append(p)
+            docs_roots = [root / "src" / "memory_os" / "docs", root / "templates"]
+            for docs_root in docs_roots:
+                if docs_root.is_dir():
+                    files.extend(p for p in docs_root.glob("**/*.md") if p.is_file())
 
-        # 4. agent_context/context_packs/**/pack.json
-        packs_dir = root / "agent_context" / "context_packs"
-        if packs_dir.is_dir():
-            for p in packs_dir.glob("**/pack.json"):
-                if p.is_file():
-                    files.append(p)
+        if profile in {"default", "all"}:
+            add_default()
+        if profile in {"private-docs", "all"}:
+            add_private_docs()
+        if profile in {"context-artifacts", "all"}:
+            add_context_artifacts()
+        if profile in {"docs", "all"}:
+            add_docs()
 
-        return sorted(list(set(files)))
+        return unique_existing_files(files)
 
     def _scan_line(self, line: str, file_rel_path: str, line_num: int) -> List[Dict[str, Any]]:
         findings: List[Dict[str, Any]] = []

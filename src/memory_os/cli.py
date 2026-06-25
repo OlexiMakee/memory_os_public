@@ -211,19 +211,12 @@ def cmd_check_updates(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     
     module_path = Path(memory_os.__file__).parent
     has_changes = False
-    current_branch = "unknown"
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain", str(module_path)],
             capture_output=True, text=True, check=True
         )
         has_changes = bool(result.stdout.strip())
-        
-        branch_result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=str(module_path), capture_output=True, text=True, check=True
-        )
-        current_branch = branch_result.stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
@@ -233,21 +226,16 @@ def cmd_check_updates(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     if has_changes:
         print("\n[!] LOCAL MODIFICATIONS DETECTED [!]")
         print("You have made changes to the local memory_os core.")
-        print("Before updating, please consider proposing your features or bug-fixes")
-        print("to the public repository via a Pull Request or Agent Proposal!")
+        print("Before publishing, separate private planning files from public-facing changes.")
 
     print("\n[AGENT INSTRUCTION]")
-    if current_branch != "main":
-        print("DOWNSTREAM RESTRICTION: You operate STRICTLY on the `public` branch.")
-        print("You are FORBIDDEN from accessing, fetching, or interacting with the `main` branch of memory_os.")
-        
-    print("You are authorized to ONLY PROPOSE features and bug-fixes for memory_os.")
-    print("DO NOT implement them directly in the downstream code.")
-    print("Propose changes by suggesting a GitHub issue/PR to the user, or by writing a proposal file to agent_proposals/.")
+    print("Public releases should target the public repository and omit private planning docs.")
+    print("Keep DEV_STRATEGY.md, agent_context/IMPORTANT_PROPOSAL.md, and other internal notes on private remotes only.")
+    print("Use normal issues, PRs, or agent proposals for public-facing feature and bug-fix work.")
     return 0
 
 def cmd_validate(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    root = Path(args.root).resolve()
+    root = config.root_dir
     
     validator = MemoryValidator(config)
     errors = []
@@ -270,7 +258,7 @@ def cmd_validate(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 
 def cmd_snapshot(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     from memory_os.modules.context import ContextRegistry
-    root = Path(args.root).resolve()
+    root = config.root_dir
     registry = ContextRegistry(str(root))
     snapshot = registry.build_snapshot(paths=["."])
     if args.write:
@@ -413,15 +401,24 @@ def cmd_context(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     from memory_os.core.context_pack import ContextPackBuilder
 
     builder = ContextPackBuilder(config)
-    pack = builder.build(task=args.task or "", contract_path=args.contract)
+    pack = builder.build(
+        task=args.task or "",
+        contract_path=args.contract,
+        paths=args.path or None,
+        include_private=args.include_private,
+    )
 
     written = None
     if not args.dry_run:
-        slug = re.sub(r"[^a-z0-9]+", "-", (args.task or Path(args.contract).stem or "pack").lower()).strip("-")[:40] or "pack"
+        from memory_os.core.write_budget import ArtifactWriteBudget
+
+        slug_source = args.task or (Path(args.contract).stem if args.contract else "pack")
+        slug = re.sub(r"[^a-z0-9]+", "-", slug_source.lower()).strip("-")[:40] or "pack"
         out_dir = config.root_dir / "agent_context" / "context_packs" / slug
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "pack.json").write_text(json.dumps(pack, indent=2), encoding="utf-8")
-        (out_dir / "pack.md").write_text(builder.to_markdown(pack), encoding="utf-8")
+        write_budget = ArtifactWriteBudget(config)
+        write_budget.write_text(out_dir / "pack.json", json.dumps(pack, indent=2), encoding="utf-8")
+        write_budget.write_text(out_dir / "pack.md", builder.to_markdown(pack), encoding="utf-8")
         written = out_dir.relative_to(config.root_dir)
 
     if args.format == "json":
@@ -607,8 +604,29 @@ def cmd_adapters_audit(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 
 def cmd_ingest(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     from memory_os.adapters.markitdown_adapter import MarkItDownAdapter
+    from memory_os.core.file_policy import load_export_ignore_patterns, resolve_ingest_path
 
-    result = MarkItDownAdapter().convert(args.path, dry_run=not args.write)
+    export_ignore_patterns = load_export_ignore_patterns(config.root_dir)
+    resolved_path, decision = resolve_ingest_path(
+        args.path,
+        config.root_dir,
+        allow_outside_root=args.allow_outside_root,
+        include_private=args.include_private,
+        export_ignore_patterns=export_ignore_patterns,
+    )
+    if not decision.allowed:
+        result = {
+            "ok": False,
+            "detail": decision.reason,
+            "source_path": args.path,
+        }
+    else:
+        result = MarkItDownAdapter().convert(
+            str(resolved_path),
+            dry_run=not args.write,
+            allowed_root=config.root_dir,
+            allow_outside_root=args.allow_outside_root,
+        )
     if args.format == "json":
         print(json.dumps(result, indent=2))
     else:
@@ -797,10 +815,15 @@ def cmd_idea(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 def cmd_security_scan(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     from memory_os.core.security_scan import SecurityScanner
 
-    result = SecurityScanner(config).scan()
+    try:
+        result = SecurityScanner(config).scan(profile=args.profile)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 1
     if args.format == "json":
         print(json.dumps(result, indent=2))
     else:
+        print(f"Profile: {result['profile']}")
         print(f"Scanned {len(result['scanned_files'])} file(s).")
         print(f"Secrets: {result['secret_count']}  |  Prompt-injection markers: {result['injection_marker_count']}")
         for f in result["findings"]:
@@ -1696,24 +1719,60 @@ def cmd_ui(args: argparse.Namespace, config: MemoryOSConfig) -> int:
 
 def cmd_resources(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     from memory_os.core.disk_guard import DiskGuard
+    from memory_os.core.write_budget import ArtifactWriteBudget
 
     guard = DiskGuard(config)
+    write_budget = ArtifactWriteBudget(config)
+    action = getattr(args, "resources_action", None) or "snapshot"
+
+    if action == "compact":
+        result = guard.compact(dry_run=args.dry_run)
+        if args.format == "json":
+            print(json.dumps(result, indent=2))
+        else:
+            print("=== Memory OS Resource Compact" + (" (dry-run)" if args.dry_run else "") + " ===\n")
+            checkpoint = result["checkpoint"]
+            print(f"  WAL checkpoint : {'OK' if checkpoint.get('ok') else 'FAILED'}")
+            if not checkpoint.get("ok"):
+                print(f"  Detail         : {checkpoint.get('detail')}")
+            print(f"  Resource level : {result['snapshot']['level'].upper()}")
+        return 0 if result.get("ok") else 1
+
+    if action == "checkpoint":
+        result = guard.checkpoint_sqlite(truncate=not args.no_truncate, dry_run=args.dry_run)
+        if args.format == "json":
+            print(json.dumps(result, indent=2))
+        else:
+            print("=== SQLite WAL Checkpoint" + (" (dry-run)" if args.dry_run else "") + " ===\n")
+            print(f"  Status : {'OK' if result.get('ok') else 'FAILED'}")
+            before = result.get("before", {})
+            after = result.get("after", {})
+            print(f"  WAL    : {before.get('wal_mb', 0.0)} MB -> {after.get('wal_mb', before.get('wal_mb', 0.0))} MB")
+            if not result.get("ok"):
+                print(f"  Detail : {result.get('detail')}")
+        return 0 if result.get("ok") else 1
+
     snap = guard.snapshot()
+    write_status = write_budget.status()
 
     if args.format == "json":
-        print(json.dumps(snap.to_dict(), indent=2))
+        result = snap.to_dict()
+        result["write_budget"] = write_status.to_dict()
+        print(json.dumps(result, indent=2))
     else:
         print("=== Memory OS Resources ===\n")
         print(f"  Free disk space    : {snap.free_disk_mb:,.1f} MB" + ("  [!] below min_free_disk_mb" if snap.low_disk else ""))
         print(f"  SQLite DB          : {snap.sqlite.db_mb} MB" + ("  [!] exceeds max_sqlite_db_mb" if snap.sqlite.exceeds_max_db else ""))
         print(f"  SQLite WAL         : {snap.sqlite.wal_mb} MB" + ("  [!] exceeds max_sqlite_wal_mb" if snap.sqlite.exceeds_max_wal else ""))
         print(f"  SQLite SHM         : {snap.sqlite.shm_mb} MB")
-        print(f"  JSONL source files : {snap.jsonl_total_mb} MB")
+        print(f"  JSONL source files : {snap.jsonl_total_mb} MB" + ("  [!] exceeds max_jsonl_total_mb" if snap.exceeds_max_jsonl else ""))
         growth = f"{snap.growth_mb_per_hour} MB/hr" if snap.growth_mb_per_hour is not None else "n/a (no prior snapshot)"
         print(f"  Growth rate        : {growth}" + ("  [!] exceeds max_observed_growth_mb_per_hour" if snap.growth_alert else ""))
+        write_flag = "  [!] over cap" if not write_status.ok else ""
+        print(f"  Agent artifacts    : {write_status.agent_context_mb} MB / {write_status.max_agent_context_mb} MB, {write_status.agent_context_files}/{write_status.max_agent_context_files} files{write_flag}")
         print(f"\nResource level: {snap.level.upper()}")
 
-    return 1 if snap.level == "hot" else 0
+    return 1 if snap.level == "hot" or not write_status.ok else 0
 
 
 def cmd_telemetry(args: argparse.Namespace, config: MemoryOSConfig) -> int:
@@ -1762,9 +1821,29 @@ def cmd_telemetry(args: argparse.Namespace, config: MemoryOSConfig) -> int:
         conn.close()
 
 
+def cmd_release_check(args: argparse.Namespace, config: MemoryOSConfig) -> int:
+    from memory_os.core.release_check import ReleaseChecker
+
+    try:
+        result = ReleaseChecker(config).run(target=args.target)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return 1
+
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        print(f"=== Memory OS Release Check ({result['target']}) ===\n")
+        for check in result["checks"]:
+            status = "OK" if check["ok"] else ("WARN" if check["severity"] == "warning" else "FAIL")
+            print(f"  [{status}] {check['name']}: {check['detail']}")
+        print(f"\nResult: {'OK' if result['ok'] else 'FAILED'}")
+    return 0 if result["ok"] else 1
+
+
 def cmd_doctor(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     import sqlite3
-    root = Path(args.root).resolve()
+    root = config.root_dir
     print("=== Memory OS Diagnostics (doctor) ===\n")
     
     ok = True
@@ -2003,6 +2082,8 @@ def build_parser() -> argparse.ArgumentParser:
     context_build_parser = context_subparsers.add_parser("build", help="Build a context pack from a task description and/or a contract file.")
     context_build_parser.add_argument("--task", default="", help="Task description used for relevance scoring.")
     context_build_parser.add_argument("--contract", default=None, help="Path to a contract.json/contract.md to seed task_summary/constraints/verification_plan.")
+    context_build_parser.add_argument("--path", action="append", default=[], help="Repeatable root-relative file or directory to scan. Defaults to the project root.")
+    context_build_parser.add_argument("--include-private", action="store_true", help="Opt in to files excluded by private/export-ignore policy.")
     context_build_parser.add_argument("--dry-run", action="store_true", help="Print the pack without writing it to agent_context/context_packs/.")
     context_build_parser.add_argument("--format", choices={"markdown", "json"}, default="markdown")
     context_build_parser.set_defaults(func=cmd_context)
@@ -2063,6 +2144,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     security_subparsers = security_parser.add_subparsers(dest="security_action", required=True)
     security_scan_parser = security_subparsers.add_parser("scan", help="Scan memory/evidence/context-pack stores for secrets and injection markers.")
+    security_scan_parser.add_argument("--profile", choices={"default", "private-docs", "context-artifacts", "docs", "all"}, default="default")
     security_scan_parser.add_argument("--format", choices={"json", "text"}, default="text")
     security_scan_parser.set_defaults(func=cmd_security_scan)
 
@@ -2136,6 +2218,8 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_subparsers = ingest_file_parser.add_subparsers(dest="ingest_action", required=True)
     ingest_file_sub = ingest_subparsers.add_parser("file", help="Convert one local file (untrusted; no network fetch; no script execution).")
     ingest_file_sub.add_argument("path", help="Local file path.")
+    ingest_file_sub.add_argument("--allow-outside-root", action="store_true", help="Explicitly permit reading a file outside the Memory OS workspace.")
+    ingest_file_sub.add_argument("--include-private", action="store_true", help="Explicitly permit files hidden by private/export-ignore policy.")
     ingest_file_sub.add_argument("--write", action="store_true", help="Reserved for future persistence; conversion itself never writes to disk.")
     ingest_file_sub.add_argument("--format", choices={"json", "text"}, default="text")
     ingest_file_sub.set_defaults(func=cmd_ingest)
@@ -2487,8 +2571,24 @@ def build_parser() -> argparse.ArgumentParser:
         "resources",
         help="Snapshot free disk space, SQLite DB/WAL size, and JSONL size against configured budgets.",
     )
+    resources_subparsers = resources_parser.add_subparsers(dest="resources_action")
     resources_parser.add_argument("--format", choices={"json", "text"}, default="text")
     resources_parser.set_defaults(func=cmd_resources)
+
+    resources_snapshot_parser = resources_subparsers.add_parser("snapshot", help="Report disk/SQLite/JSONL resource health.")
+    resources_snapshot_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    resources_snapshot_parser.set_defaults(func=cmd_resources)
+
+    resources_checkpoint_parser = resources_subparsers.add_parser("checkpoint", help="Run a SQLite WAL checkpoint.")
+    resources_checkpoint_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    resources_checkpoint_parser.add_argument("--dry-run", action="store_true")
+    resources_checkpoint_parser.add_argument("--no-truncate", action="store_true", help="Use FULL checkpoint instead of TRUNCATE.")
+    resources_checkpoint_parser.set_defaults(func=cmd_resources)
+
+    resources_compact_parser = resources_subparsers.add_parser("compact", help="Run bounded local resource compaction actions.")
+    resources_compact_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    resources_compact_parser.add_argument("--dry-run", action="store_true")
+    resources_compact_parser.set_defaults(func=cmd_resources)
 
     telemetry_parser = subparsers.add_parser(
         "telemetry",
@@ -2504,6 +2604,14 @@ def build_parser() -> argparse.ArgumentParser:
     telemetry_prune_parser.add_argument("--format", choices={"json", "text"}, default="text")
     telemetry_prune_parser.add_argument("--dry-run", action="store_true", help="Report what would be pruned without deleting anything.")
     telemetry_prune_parser.set_defaults(func=cmd_telemetry)
+
+    release_check_parser = subparsers.add_parser(
+        "release-check",
+        help="Run deterministic local gates before private or public publishing.",
+    )
+    release_check_parser.add_argument("--target", choices={"private", "public"}, default="private")
+    release_check_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    release_check_parser.set_defaults(func=cmd_release_check)
 
     check_updates_parser = subparsers.add_parser(
         "check-updates",
