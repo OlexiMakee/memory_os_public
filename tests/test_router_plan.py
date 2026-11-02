@@ -106,7 +106,8 @@ def test_budget_degraded_flag_not_set_by_default(root):
 
 
 def test_local_model_available_via_ollama_http_without_cli(root, monkeypatch):
-    monkeypatch.setattr("memory_os.toolkit.router_plan.shutil.which", lambda binary: None if binary == "ollama" else f"/usr/bin/{binary}")
+    monkeypatch.setattr("memory_os.toolkit.agent_health.shutil.which", lambda binary: None if binary == "ollama" else f"/usr/bin/{binary}")
+    monkeypatch.setattr("memory_os.core.llm_service.ollama_http_health", lambda timeout=1.5: {"ok": True, "host": "http://localhost:11434", "model": "qwen3:4b"})
     monkeypatch.setattr("memory_os.toolkit.router_plan._ollama_http_available", lambda: True)
 
     plan = RouterPlan(root).route(text="classify", risk="low", capabilities=["classify"])

@@ -180,15 +180,22 @@ def test_daemon_blocks_unroutable_capability_task_without_dispatch(tmp_path, mon
 def test_unix_domain_socket_ipc_and_fallback(tmp_path):
     import os
     import socket
+    import tempfile
     if not hasattr(socket, "AF_UNIX"):
         return
 
     config = make_daemon_root(tmp_path)
     daemon = MemoryDaemon(config, tmp_path / "transcript.jsonl")
 
+    # On macOS, tmp_path paths under /private/var/folders can exceed the 104-byte AF_UNIX sockaddr limit.
+    # Use a short /tmp directory for the unix domain socket test.
+    short_sock_dir = tempfile.TemporaryDirectory(dir="/tmp")
+    daemon.socket_path = os.path.join(short_sock_dir.name, "m.sock")
+
     # Start IPC server
     daemon.ipc_server.start()
     if daemon.http_server is None:
+        short_sock_dir.cleanup()
         return
     try:
         # Test direct unix socket query
@@ -216,6 +223,7 @@ def test_unix_domain_socket_ipc_and_fallback(tmp_path):
                 os.unlink(daemon.socket_path)
             except OSError:
                 pass
+        short_sock_dir.cleanup()
 
 
 def test_daemon_rejects_unsafe_space_switch(tmp_path):

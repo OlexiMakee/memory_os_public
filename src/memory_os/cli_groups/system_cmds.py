@@ -418,7 +418,7 @@ def cmd_ls(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     else:
         print("daemon     (not running)")
 
-    return 0 if any_running else 1
+    return 0
 
 def cmd_install(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     """Run universal system bootstrap and environment diagnostic."""

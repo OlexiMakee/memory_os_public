@@ -14,6 +14,7 @@ def run_cli(*args):
 
 def test_cli_smoke_doctor():
     """Ensure `doctor` command runs without crashing."""
+    run_cli("init")
     result = run_cli("doctor")
     assert result.returncode == 0, f"doctor failed. STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 

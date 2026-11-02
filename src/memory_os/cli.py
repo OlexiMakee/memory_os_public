@@ -351,7 +351,11 @@ def build_parser() -> argparse.ArgumentParser:
     integrate_parser.add_argument(
         "--install-git-hooks",
         action="store_true",
-        help="Install pre-commit and post-commit Git hooks for release-check and snapshot logging.",
+        help=(
+            "Install pre-commit/post-commit Git hooks. The memory_os CLI is resolved at runtime "
+            "($VIRTUAL_ENV, venv_auto, .venv, venv, env, PATH). Gate: release-check in the memory_os "
+            "package repo; validate + security scan in consumer projects."
+        ),
     )
     integrate_parser.set_defaults(func=cmd_integrate)
 

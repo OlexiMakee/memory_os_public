@@ -141,7 +141,8 @@ def test_comm_memory_sync_uses_user_timezone(root, monkeypatch):
 
     assert result.ok is True
     nodes = [json.loads(line) for line in (root / "memory" / "nodes.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert nodes[-1]["freshness"].endswith("+03:00")
+    # Europe/Kyiv is EET (+02:00 in standard/winter time) or EEST (+03:00 in summer/daylight time)
+    assert nodes[-1]["freshness"].endswith(("+02:00", "+03:00"))
 
 
 def test_comm_send_falls_back_to_inbox_when_tmux_wakeup_fails(root, monkeypatch):
