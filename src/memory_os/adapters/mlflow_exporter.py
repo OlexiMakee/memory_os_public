@@ -110,8 +110,9 @@ class MLflowExporter:
                     # Try to log the original bundle JSON content as an artifact
                     try:
                         mlflow.log_text(json.dumps(bundle, indent=2), "bundle.json")
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        import sys as _sys
+                        print(f'Ignored exception: {_e}', file=_sys.stderr)
 
             return {
                 "ok": True,

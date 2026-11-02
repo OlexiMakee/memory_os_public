@@ -8,6 +8,18 @@ Memory OS gives your AI agent a persistent, indexed memory graph plus repeatable
 
 ## Install
 
+Full console-first workspace from GitHub:
+
+```bash
+git clone https://github.com/OlexiMakee/memory_os.git
+cd memory_os
+bash scripts/bootstrap_ubuntu.sh --apt --extras dev,providers-ollama,resource-psutil
+```
+
+Agent handoff for a clean Linux server: [AGENT_DEPLOY.md](AGENT_DEPLOY.md).
+
+Package-only install:
+
 ```bash
 pip install git+https://github.com/OlexiMakee/memory_os_public.git
 ```
@@ -61,6 +73,7 @@ memory_os triage
 | `triage` | Interactive review of draft nodes |
 | `query` | Filter nodes by type, status, trust, tag, date |
 | `backlinks <id>` | Show all nodes that reference a given node |
+| `memory log [--node <id>]` / `memory show <id>` / `memory revert <id>` | "Git log"/"git show"/rollback for the memory graph over `events.jsonl`/`archived_nodes.jsonl` — no new storage format. See `src/memory_os/docs/encyclopedia/roadmap.md` (Git Memory Chain evaluation). |
 | `audit` | Audit control-plane state |
 
 ## Engineering Control Plane
@@ -78,11 +91,15 @@ The engineering control plane turns a vague request into a verified result: idea
 | `eval list/run/compare` | Run local-deterministic and optional LLM-judge eval suites for nondeterministic behavior |
 | `security scan --profile <profile>` | Scan local memory, private docs, context artifacts, or docs for secrets and injection markers |
 | `resources snapshot/checkpoint/compact` / `telemetry audit/prune` | Check and bound disk, SQLite WAL, JSONL, and telemetry growth |
+| `storage advise` | Recommend a storage tier (sqlite / local_postgres / cloud_postgres) from measured DB size, WAL growth, and swarm concurrency — advisory only, never migrates |
 | `release-check --target private/public` | Run deterministic local gates before publishing |
 | `route --task "..."` / `budget status` | Show provider/model routing and current token budget status without a network call |
 | `prompt list/show/render` | Inspect versioned, hashed prompt templates without an LLM call |
 | `adapters audit` | Check which optional adapters are installed; none are required by default |
 | `run start/status/complete` | Keep lightweight native run and checkpoint records for multi-step workflows |
+| `skills list/validate/sync` | Manage repo-local agent skills (`skills/<name>/SKILL.md`) and sync them into Codex/Claude/agy project directories |
+| `lora dataset build` / `lora script render --method sft\|dpo\|grpo` / `lora list` / `lora registry versions\|promote\|reject` | Build a TRL-ready dataset, render an Unsloth+TRL+PEFT training script for SFT (default, loss masked to assistant/tool-call tokens), DPO (chosen-vs-rejected ranking after an SFT pass), or GRPO (reward-driven, reward function stubbed as a TODO) — registers a new `candidate` adapter version. Offline, no GPU needed here; training runs on separate GPU hardware. See `src/memory_os/docs/encyclopedia/lora_training.md`. |
+| `agent run --task "..."` | Base-model action core: `Orchestrator` + `ActionBrain`/`Responder` + real executors against `MemorySearcher`/`LifecycleManager`. Works with any configured provider today (no trained action-LoRA needed to test the wiring); point `--model` at a trained adapter's Ollama tag later. See `src/memory_os/docs/encyclopedia/agent_brain.md`. |
 
 ## How it works
 
@@ -125,13 +142,26 @@ pip install "memory_os[all]"
 Create a `.env` in your project root:
 
 ```bash
-OPENAI_API_KEY=sk-...       # for compact/compress/prune (LLM operations)
-OPENROUTER_API_KEY=...      # alternative provider
-GEMINI_API_KEY=...          # alternative provider
+# No key needed: a local Ollama daemon (http://localhost:11434) is tried
+# first, automatically, using whatever model you've already pulled.
+GEMINI_API_KEY=...          # tried 2nd — free tier, large context window
+GROQ_API_KEY=gsk_...        # tried 3rd — free tier, fast inference
+OPENROUTER_API_KEY=...      # tried 4th — routes to the free-tier model pool
+OPENAI_API_KEY=sk-...       # tried last — paid fallback
 ```
 
-LLM operations (`compact`, `compress`, `giant-scan`) require at least one key.
-`init`, `validate`, `sync`, `search`, `review`, `approve`, `triage`, `query`, `backlinks` work offline.
+`compact`/`compress`/`link-infer`/`giant-scan` try local Ollama first, then cloud
+providers in the order above, falling through whenever a key is missing, no
+local model is pulled, or a call fails — so a single configured key (or just
+a running Ollama) is enough to run LLM operations. For the cloud free tiers,
+the model name is *not* hardcoded: each call asks that provider's live
+`/models` endpoint what's currently free/available and picks from there, so
+the chain keeps working after a provider renames or retires a model. Use
+`--provider` on any of these commands to pin a single provider instead of
+falling through (`--provider ollama` to force local-only).
+
+LLM operations (`compact`, `compress`, `giant-scan`) require at least one key, or a local Ollama daemon with a model pulled.
+`init`, `validate`, `sync`, `search`, `review`, `approve`, `triage`, `query`, `backlinks`, `memory log`, `memory show`, `memory revert` work offline.
 
 `python3 test_auto.py` runs against an isolated temporary Memory OS workspace by default. Use `python3 test_auto.py --live-smoke` only when intentionally testing the current checkout's live runtime state.
 

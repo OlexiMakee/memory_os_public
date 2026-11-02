@@ -1,19 +1,18 @@
-import ast
 import hashlib
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from memory_os.core.adapters import CodebaseDomainAdapter
+from memory_os.core.adapters import DomainAdapterRegistry
 from memory_os.core.file_policy import classify_private_path, load_export_ignore_patterns
 
 class ContextRegistry:
     """Standalone developer memory indexing engine. Builds compact context snapshots."""
 
-    def __init__(self, root_dir: str):
+    def __init__(self, root_dir: str, domain_adapters: Optional[DomainAdapterRegistry] = None):
         self.root_dir = Path(root_dir).resolve()
-        self.adapter = CodebaseDomainAdapter()
+        self.domain_adapters = domain_adapters or DomainAdapterRegistry()
 
     def rel(self, path: Path) -> str:
         """Get relative path string."""
@@ -111,8 +110,9 @@ class ContextRegistry:
             "bytes": path.stat().st_size,
             "sha256_16": self.sha256_text(text),
         }
-        if suffix in {".py", ".js"}:
-            meta.update(self.adapter.extract_metadata(path.name, text))
+        adapter_meta = self.domain_adapters.extract_metadata(self.rel(path), text)
+        if adapter_meta:
+            meta.update(adapter_meta)
         elif suffix in {".md", ".txt"}:
             headings = re.findall(r"^(#{1,4})\s+(.+)$", text, flags=re.MULTILINE)
             meta["headings"] = [title.strip() for _, title in headings[:20]]

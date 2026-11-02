@@ -1,79 +1,92 @@
-# 🚀 Memory OS Quickstart
+# Memory OS Quickstart
 
-Welcome to **Memory OS**! This guide will help you build your first AI agent with a Local-First Long-Term Semantic Memory. Memory OS acts as an external hippocampus for your LLMs, keeping them grounded and focused.
+This is the short path for a clean Linux server or VM. For a full agent handoff
+prompt, use [AGENT_DEPLOY.md](AGENT_DEPLOY.md).
 
-## 1. Installation
+## 1. Clone
 
-For now, install Memory OS locally in editable mode:
+Use the GitHub URL you were given. For the private development repository:
+
 ```bash
-git clone https://github.com/your-org/memory_os.git
+git clone https://github.com/OlexiMakee/memory_os.git
 cd memory_os
-pip install -e .
 ```
 
-## 2. Core Concepts
-
-* **MemoryRepository**: The central database (SQLite + JSONL) where knowledge is kept.
-* **Nodes & Edges**: Knowledge is modeled as a graph. A `MemoryNode` can be a constraint, feature, or file. A `MemoryEdge` connects them.
-* **RelationPatch**: Instead of direct writes, agents submit *patches* (proposals). This allows human review and protocol-based security.
-* **MemorySearcher**: Finds relevant context before sending prompts to your LLM.
-
-## 3. Basic Example: Storing and Retrieving Rules
-
-Let's initialize a database and teach it a basic architectural rule.
-
-```python
-from pathlib import Path
-from memory_os.core.config import MemoryOSConfig
-from memory_os.core.storage import FileSystemMemoryStorage
-from memory_os.core.repository import MemoryRepository
-from memory_os.core.patch import RelationPatch
-from memory_os.core.search import MemorySearcher
-
-# 1. Initialize configuration and repository
-config = MemoryOSConfig(Path.cwd())
-repo = MemoryRepository(FileSystemMemoryStorage(), config)
-
-# 2. Teach Memory OS a rule via a Patch
-from memory_os.core.patch import RelationPatch, RelationPatchStore
-
-patch = RelationPatch(
-    operation="upsert_node",
-    source="",
-    target="rule:ui_framework",
-    type="constraint",
-    domain="architecture",
-    confidence=1.0,
-    evidence=["Conversation with Lead Dev"],
-    reason="Establish UI standard",
-    payload={"summary": "We must only use React. No Vue or Angular."},
-    created_by_protocol=0,
-    required_verification_protocol=0
-)
-
-store = RelationPatchStore(repo)
-patch_id = store.propose(patch)
-store.apply(patch_id)
-
-# 3. Retrieve context before prompting an LLM
-searcher = MemorySearcher(config=config, repository=repo)
-# Memory OS uses keyword substring search by default
-results = searcher.search_memory("rule:ui_framework")
-
-print("Found Context:")
-for n in results:
-    print(f"- {n.get('summary')}")
-```
-
-## 4. Visualizing the Graph
-
-Memory OS comes with a built-in 3D Force Graph UI. Run the following command in your project root:
+If HTTPS is not authenticated for the private repository, use SSH instead:
 
 ```bash
-python3 -m memory_os ui
+git clone git@github.com:OlexiMakee/memory_os.git
+cd memory_os
 ```
-Then open `http://127.0.0.1:8099` in your browser to see your nodes and connections!
 
-## 5. Next Steps
+## 2. Bootstrap
 
-Check out the `examples/` directory to see how to integrate Memory OS with LiteLLM, AutoGen, CrewAI, and other frameworks using our out-of-the-box Bridges!
+On Ubuntu/Debian-like servers:
+
+```bash
+bash scripts/bootstrap_ubuntu.sh --apt --extras dev,providers-ollama,resource-psutil
+```
+
+This installs system packages only when `--apt` is present, creates `.venv`,
+installs Memory OS in editable mode, and runs deterministic checks.
+
+Optional local model runtime:
+
+```bash
+bash scripts/bootstrap_ubuntu.sh --ollama --pull-model qwen2.5-coder:7b --extras providers-ollama
+```
+
+## 3. Verify
+
+```bash
+source .venv/bin/activate
+memory_os validate
+memory_os release-check --target private
+memory_os resources snapshot
+memory_os agent-manager --status
+```
+
+Expected result:
+
+- `validate` passes.
+- `release-check --target private` returns `ok`.
+- `resources snapshot` reports resource level `COOL` unless the host is out of disk.
+- `agent-manager --status` shows installed CLI agents and their runtime status.
+
+## 4. Start The Workspace
+
+For the console-first multi-agent workspace:
+
+```bash
+memory_os zellij
+```
+
+If a previous Zellij session is stale:
+
+```bash
+memory_os workspace status
+memory_os workspace clean-exited --runtime zellij --apply
+memory_os zellij
+```
+
+## 5. Agent Rule
+
+Add this to the active agent instructions:
+
+```markdown
+Before work: run `memory_os search "<topic>"`.
+After code edits: run `python -m pytest tests/ -x -q`.
+Before publishing: run `memory_os release-check --target private`.
+After finishing a swarm task: send `memory_os comm send --kind STATUS_REPORT ...`.
+```
+
+## 6. Minimal Health Probe
+
+```bash
+memory_os search "memory graph"
+memory_os eval run retrieval-relevance
+memory_os storage advise
+```
+
+If all three commands work, the memory engine, retrieval eval loop, and storage
+advisor are usable on the new machine.

@@ -4,18 +4,32 @@
 from __future__ import annotations
 
 import argparse
-import json
-import re
-import subprocess
+from memory_os.toolkit.agent_registry import KNOWN_AGENTS
+import shutil
 import sys
 import os
-from datetime import datetime
+from datetime import timezone
 from pathlib import Path
-from typing import Any, Dict, List
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+UTC = timezone.utc
+
+from memory_os.cli_groups.agent_cmds import cmd_task, cmd_plan, cmd_dispatch, cmd_comm, cmd_handoff, cmd_agent_registry, cmd_agent_manager, cmd_agent_run, cmd_swarm_send, cmd_swarm_watch
+from memory_os.cli_groups.memory_cmds import cmd_snapshot, cmd_ingest, cmd_change_size, cmd_compact, cmd_sync, cmd_compress, cmd_link_infer, cmd_prune, cmd_transition, cmd_graph_map, cmd_query, cmd_backlinks, cmd_memory_browse, cmd_memory_write, cmd_memory_log, cmd_memory_show, cmd_memory_revert, cmd_memory_normalize_timecodes, cmd_memory_health, cmd_memory_curate, cmd_memory_dedup_candidates, cmd_memory_merge_preview, cmd_memory_merge_apply, cmd_unlinked, cmd_stats, cmd_rag, cmd_ingest_transcript, cmd_search, cmd_db_optimize, cmd_export_obsidian
+from memory_os.cli_groups.system_cmds import cmd_init, cmd_integrate, cmd_audit, cmd_switch_space, cmd_check_updates, cmd_validate, cmd_daemon, cmd_ls, cmd_install, cmd_workspace, cmd_zellij, cmd_run_daemon_blocking, cmd_monitor, cmd_ui, cmd_resources, cmd_storage, cmd_telemetry, cmd_git_commit_safe, cmd_release_check, _print_workspace_runtime_doctor, cmd_doctor, cmd_killall, cmd_undo
+from memory_os.cli_groups.llm_cmds import (cmd_models, cmd_quantize, cmd_eval, cmd_route, cmd_budget, cmd_adapters_audit, cmd_mcp, cmd_run, cmd_provider, cmd_prompt, cmd_compile_prompt)
+from memory_os.cli_groups.persona_cmds import (cmd_idea, cmd_persona_sync, cmd_persona)
+from memory_os.cli_groups.spec_cmds import (cmd_workflows, cmd_spec, cmd_contract, cmd_context, cmd_evidence, cmd_security_scan, cmd_review_pack, cmd_codebase, cmd_triage, cmd_review, cmd_approve)
+from memory_os.cli_groups.lora_cmds import (cmd_lora_dataset_build, cmd_lora_script_render, cmd_lora_registry, cmd_lora_list)
+from memory_os.cli_groups.os_cmds import (cmd_analyze_os, cmd_linux, cmd_xfce, cmd_giant_scan)
+from memory_os.cli_groups.telegram_cmds import cmd_telegram_daemon, cmd_telegram_daemon_control
+from memory_os.cli_groups.tmux_cmds import (cmd_tmux)
+from memory_os.cli_groups.sync_cmds import (cmd_pipeline, cmd_linear_sync, cmd_notion_sync, cmd_gdrive_sync)
+from memory_os.cli_groups.misc_cmds import (cmd_observe, cmd_analytics, cmd_export_skills, cmd_skills)
+
 
 # Load .env from the current working directory (the user's project root)
 _env_file = Path.cwd() / ".env"
@@ -27,15 +41,7 @@ if _env_file.exists():
         _k, _, _v = _line.partition("=")
         os.environ.setdefault(_k.strip(), _v.strip())
 
-from memory_os import (
-    MemoryOSConfig,
-    MemoryValidator,
-    MemoryCompactor,
-    LifecycleManager,
-    MemorySearcher,
-    MemoryOS
-)
-from memory_os.toolkit.auditor import audit, to_markdown
+from memory_os import MemoryOSConfig
 
 DEFAULT_WORKFLOWS = """# Workflows
 
@@ -112,1152 +118,145 @@ format = "adr_proposal"
 """,
 }
 
-def write_if_missing(path: Path, content: str, actions: List[str]) -> None:
-    if path.exists():
-        actions.append(f"exists {path}")
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    actions.append(f"created {path}")
-
-def append_if_absent(path: Path, marker: str, content: str, actions: List[str]) -> None:
-    if path.exists():
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        if marker in text:
-            actions.append(f"already integrated {path}")
-            return
-        path.write_text(text.rstrip() + "\n" + content.lstrip(), encoding="utf-8")
-        actions.append(f"updated {path}")
-        return
-    path.write_text(content.lstrip(), encoding="utf-8")
-    actions.append(f"created {path}")
-
-def cmd_init(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.spec_workflow import CONSTITUTION_TEMPLATE
-
-    root = Path(args.root).resolve()
-    actions: List[str] = []
-    write_if_missing(root / "agent_context" / "WORKFLOWS.md", DEFAULT_WORKFLOWS, actions)
-    write_if_missing(
-        root / "agent_context" / "HANDSHAKE.md",
-        "# Agent Handshake\n\n## Current Session Status\n- Active Agent: unknown\n- Budget Tier applied: `memory_os nano` / score 1\n- Target: Initial Memory OS bootstrap.\n",
-        actions,
-    )
-    write_if_missing(root / "agent_context" / "development_log.md", "# Development Log\n", actions)
-    write_if_missing(
-        root / "agent_context" / "CONSTITUTION.md",
-        CONSTITUTION_TEMPLATE,
-        actions,
-    )
-    write_if_missing(root / "agent_context" / "task_capsules.jsonl", "", actions)
-    write_if_missing(root / "memory" / "nodes.jsonl", "", actions)
-    write_if_missing(root / "memory" / "edges.jsonl", "", actions)
-    write_if_missing(root / "memory" / "events.jsonl", "", actions)
-    write_if_missing(root / "specs" / ".gitkeep", "", actions)
-    for filename, content in DEFAULT_WORKFLOW_TOMLS.items():
-        write_if_missing(root / "workflows" / filename, content, actions)
-    write_if_missing(
-        root / "memory_os.config.json",
-        json.dumps({
-            "version": "0.1",
-            "created_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-            "workflows": ["product", "memory_os"],
-            "step_scale": "1..12",
-        }, indent=2, sort_keys=True) + "\n",
-        actions,
-    )
-    print("\n".join(actions))
-    return 0
-
-def cmd_integrate(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    root = Path(args.root).resolve()
-    actions: List[str] = []
-    if not (root / "agent_context" / "WORKFLOWS.md").exists():
-        write_if_missing(root / "agent_context" / "WORKFLOWS.md", DEFAULT_WORKFLOWS, actions)
-    append_if_absent(root / "AGENTS.md", "## Memory OS Integration", DEFAULT_AGENTS_BLOCK, actions)
-    print("\n".join(actions))
-    return 0
-
-def cmd_audit(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    report = audit(Path(args.root).resolve())
-    if args.format == "json":
-        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
-    else:
-        print(to_markdown(report))
-    return 1 if report["capsule_jsonl_errors"] or report["capsule_validation_errors"] else 0
-
-def cmd_switch_space(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    import urllib.request
-    import json
-    
-    url = f"http://127.0.0.1:{config.daemon_port}/space"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"space": args.target_space}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            if resp.status == 200:
-                print(f"[Switched] Daemon space updated to '{args.target_space}'.")
-                return 0
-    except Exception as e:
-        print(f"Failed to switch daemon space. Is the daemon running? ({e})")
-        return 1
-
-def cmd_check_updates(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    import memory_os
-    
-    module_path = Path(memory_os.__file__).parent
-    has_changes = False
-    try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain", str(module_path)],
-            capture_output=True, text=True, check=True
-        )
-        has_changes = bool(result.stdout.strip())
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-
-    print("Memory OS Upstream Configuration:")
-    print("  URL: https://github.com/OlexiMakee/memory_os_public")
-    
-    if has_changes:
-        print("\n[!] LOCAL MODIFICATIONS DETECTED [!]")
-        print("You have made changes to the local memory_os core.")
-        print("Before publishing, separate private planning files from public-facing changes.")
-
-    print("\n[AGENT INSTRUCTION]")
-    print("Public releases should target the public repository and omit private planning docs.")
-    print("Keep DEV_STRATEGY.md, agent_context/IMPORTANT_PROPOSAL.md, and other internal notes on private remotes only.")
-    print("Use normal issues, PRs, or agent proposals for public-facing feature and bug-fix work.")
-    return 0
-
-def cmd_validate(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    root = config.root_dir
-    
-    validator = MemoryValidator(config)
-    errors = []
-    
-    errors.extend(validator.validate_file())
-    errors.extend(validator.validate_nodes())
-    errors.extend(validator.validate_edges())
-    errors.extend(validator.validate_events())
-    errors.extend(validator.validate_proposals_file())
-
-    from memory_os.toolkit.workflow_validator import build_report as build_workflow_report
-    workflow_report = build_workflow_report(root)
-    errors.extend(f"workflows: {error}" for error in workflow_report["errors"])
-
-    if errors:
-        print("\n".join(errors))
-        return 1
-    print("memory_os validation ok")
-    return 0
-
-def cmd_snapshot(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.modules.context import ContextRegistry
-    root = config.root_dir
-    registry = ContextRegistry(str(root))
-    snapshot = registry.build_snapshot(paths=["."])
-    if args.write:
-        snapshot_file = config.snapshot_file
-        snapshot_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(snapshot_file, "w", encoding="utf-8") as f:
-            json.dump(snapshot, f, indent=2, ensure_ascii=False)
-        print(f"Snapshot successfully written to {snapshot_file.relative_to(root)}")
-    else:
-        print(json.dumps(snapshot, indent=2, ensure_ascii=False))
-    return 0
-
-def cmd_quantize(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.quantizer import calculate_score, resolve_profile
-
-    legacy_score = calculate_score(
-        args.task,
-        risk=args.risk,
-        volume=args.volume,
-        uncertainty=args.uncertainty,
-    )
-    result = {
-        "task": args.task,
-        "legacy_score": legacy_score,
-        **resolve_profile(legacy_score),
-    }
-    if args.format == "json":
-        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-    else:
-        print(f"Task: {result['task']}")
-        print(f"Legacy Score: {result['legacy_score']}/100")
-        print(f"Step Score: {result['step_score']}/12")
-        print(f"Step Name: {result['step_name']}")
-        print(f"Workflow ID: {result['workflow_id']}")
-        print(f"Model Policy: {result['model_policy']}")
-        print(f"Escalate: {str(result['escalate']).lower()}")
-    return 0
-
-def cmd_workflows(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.workflow_validator import build_report, to_markdown, write_manifest
-
-    root = Path(args.root).resolve()
-    report = build_report(root)
-    if args.write_manifest:
-        write_manifest(report, root / args.manifest_path)
-    if args.format == "json":
-        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
-    else:
-        print(to_markdown(report))
-    return 0 if report["ok"] else 1
-
-def cmd_spec(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.spec_workflow import SpecManager, report_to_markdown
-
-    manager = SpecManager(Path(args.root).resolve())
-    action = args.spec_action
-    if action == "init":
-        try:
-            paths = manager.init_feature(
-                title=args.title,
-                description=args.description or "",
-                feature_id=args.id,
-                force=args.force,
-            )
-        except (FileExistsError, ValueError) as exc:
-            print(f"Error: {exc}")
-            return 1
-        result = paths.to_dict(manager.root)
-        if args.format == "json":
-            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-        else:
-            print(f"Created spec workspace: {result['root']}")
-            print(f"- spec: {result['spec']}")
-            print(f"- plan: {result['plan']}")
-            print(f"- tasks: {result['tasks']}")
-            print(f"- checklist: {result['checklist']}")
-        return 0
-
-    if action == "constitution":
-        path = manager.ensure_constitution(force=args.force)
-        if args.format == "json":
-            print(json.dumps({"path": str(path.relative_to(manager.root))}, ensure_ascii=False, indent=2))
-        else:
-            print(f"Wrote {path.relative_to(manager.root)}")
-        return 0
-
-    if action == "list":
-        features = manager.list_features()
-        if args.format == "json":
-            print(json.dumps({"features": features}, ensure_ascii=False, indent=2, sort_keys=True))
-        else:
-            if not features:
-                print("No specs found.")
-            for feature in features:
-                print(f"{feature['feature_id']}\t{feature['path']}")
-        return 0
-
-    if action == "analyze":
-        try:
-            report = manager.analyze(args.feature)
-        except (FileNotFoundError, ValueError) as exc:
-            report = {
-                "ok": False,
-                "feature_id": args.feature,
-                "files": {},
-                "requirements": [],
-                "scenarios": [],
-                "tasks": [],
-                "errors": [str(exc)],
-                "warnings": [],
-            }
-        if args.format == "json":
-            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
-        else:
-            print(report_to_markdown(report))
-        return 0 if report["ok"] else 1
-
-    raise ValueError(f"Unsupported spec action: {action}")
-
-
-def cmd_contract(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.spec_workflow import SpecManager, contract_to_markdown
-
-    manager = SpecManager(Path(args.root).resolve())
-    try:
-        contract = manager.write_contract(args.feature, risk_class=args.risk_class, force=args.force)
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"Error: {exc}")
-        return 1
-
-    if args.format == "json":
-        print(json.dumps(contract, ensure_ascii=False, indent=2, sort_keys=True))
-    else:
-        print(contract_to_markdown(contract))
-        print(f"\nWrote {contract['contract_md']} and {contract['contract_json']}")
-    return 0
-
-
-def cmd_context(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.context_pack import ContextPackBuilder
-
-    builder = ContextPackBuilder(config)
-    pack = builder.build(
-        task=args.task or "",
-        contract_path=args.contract,
-        paths=args.path or None,
-        include_private=args.include_private,
-    )
-
-    written = None
-    if not args.dry_run:
-        from memory_os.core.write_budget import ArtifactWriteBudget
-
-        slug_source = args.task or (Path(args.contract).stem if args.contract else "pack")
-        slug = re.sub(r"[^a-z0-9]+", "-", slug_source.lower()).strip("-")[:40] or "pack"
-        out_dir = config.root_dir / "agent_context" / "context_packs" / slug
-        out_dir.mkdir(parents=True, exist_ok=True)
-        write_budget = ArtifactWriteBudget(config)
-        write_budget.write_text(out_dir / "pack.json", json.dumps(pack, indent=2), encoding="utf-8")
-        write_budget.write_text(out_dir / "pack.md", builder.to_markdown(pack), encoding="utf-8")
-        written = out_dir.relative_to(config.root_dir)
-
-    if args.format == "json":
-        print(json.dumps(pack, indent=2))
-    else:
-        print(builder.to_markdown(pack))
-
-    if written:
-        print(f"\nWrote {written}/pack.json and {written}/pack.md")
-    return 0
-
-
-def cmd_evidence(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.evidence import EvidenceStore, bundle_to_markdown
-
-    store = EvidenceStore(config)
-    action = args.evidence_action
-
-    try:
-        if action == "init":
-            bundle = store.init(args.task, risk_class=args.risk_class, force=args.force, dry_run=args.dry_run)
-            if args.format == "json":
-                print(json.dumps(bundle, indent=2))
-            else:
-                print(f"{'Would create' if args.dry_run else 'Created'} evidence bundle for task '{args.task}'" + (f" (risk class: {args.risk_class})" if args.risk_class else ""))
-            return 0
-
-        if action == "add-command":
-            command = list(args.command)
-            if command and command[0] == "--":
-                command = command[1:]
-            if not command:
-                print("Error: no command given after '--'")
-                return 1
-            bundle = store.add_command(args.task, command, dry_run=args.dry_run)
-            entry = bundle["_last_command"]
-            if args.format == "json":
-                print(json.dumps(entry, indent=2))
-            else:
-                print(f"$ {entry['command']}")
-                print(entry["output_summary"])
-                print(f"\nexit code: {entry['exit_code']}" + ("  (dry-run, not saved)" if args.dry_run else ""))
-            return entry["exit_code"]
-
-        if action == "summarize":
-            bundle = store.summarize(
-                args.task,
-                manual_checks=args.manual_check,
-                known_gaps=args.known_gap,
-                reviewer_notes=args.reviewer_note,
-                dry_run=args.dry_run,
-            )
-            if args.format == "json":
-                print(json.dumps(bundle, indent=2))
-            else:
-                print(bundle_to_markdown(bundle))
-            return 0
-
-        # verify
-        result = store.verify(args.task)
-        if args.format == "json":
-            print(json.dumps(result, indent=2))
-        else:
-            print(f"Evidence verify: {'OK' if result['ok'] else 'FAILED'} (task {args.task})")
-            for reason in result["reasons"]:
-                print(f"  [!] {reason}")
-        return 0 if result["ok"] else 1
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"Error: {exc}")
-        return 1
-    except FileExistsError as exc:
-        print(f"Error: {exc}")
-        return 1
-
-
-def cmd_eval(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.eval_runner import EvalRunner
-
-    runner = EvalRunner(config)
-    action = args.eval_action
-
-    if action == "list":
-        suites = runner.list_suites()
-        if args.format == "json":
-            print(json.dumps(suites, indent=2))
-        else:
-            for s in suites:
-                print(f"{s['name']}\t{s['kind']}\tcases={s['case_count']}\tthreshold={s['pass_threshold']}\t{s['description']}")
-        return 0
-
-    if action == "run":
-        result = runner.run(args.suite)
-        if args.format == "json":
-            print(json.dumps(result, indent=2))
-        else:
-            print(f"{result['suite']} [{result['kind']}]: {result['status']} (pass_rate={result['pass_rate']:.2f}, threshold={result['pass_threshold']})")
-            for c in result.get("cases", []):
-                print(f"  [{'PASS' if c.get('passed') else 'FAIL'}] {c['id']}: {c.get('detail', '')}")
-            if result.get("reason"):
-                print(f"  reason: {result['reason']}")
-        return 0 if result["ok"] else 1
-
-    if action == "export":
-        from memory_os.toolkit.eval_export import write_export
-
-        try:
-            path = write_export(args.suite, args.target)
-        except (FileNotFoundError, ValueError) as exc:
-            print(f"Error: {exc}")
-            return 1
-        print(f"Wrote {path}")
-        return 0
-
-    # compare
-    try:
-        baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
-        candidate = json.loads(Path(args.candidate).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"Error: {exc}")
-        return 1
-    diff = runner.compare(baseline, candidate)
-    if args.format == "json":
-        print(json.dumps(diff, indent=2))
-    else:
-        print(f"pass_rate delta: {diff['pass_rate_delta']:+.2f}")
-        for f in diff["flipped_cases"]:
-            print(f"  {f['id']}: {f['baseline_passed']} -> {f['candidate_passed']}")
-    return 0
-
-
-def cmd_route(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.routing_policy import RoutingPolicy
-
-    decision = RoutingPolicy(config).route(args.task)
-    if args.format == "json":
-        print(json.dumps(decision, indent=2))
-    else:
-        print(f"{decision['task_type']} -> {decision['provider']}/{decision['model']} ({decision['reason']})")
-    return 0
-
-
-def cmd_budget(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.routing_policy import RoutingPolicy
-
-    status = RoutingPolicy(config).budget_status()
-    if args.format == "json":
-        print(json.dumps(status, indent=2))
-    else:
-        print(f"Tokens used: {status['tokens_used']}/{status['daily_budget']} (remaining: {status['remaining']})")
-        if status["exhausted"]:
-            print("  [!] daily budget exhausted")
-    return 0
-
-
-def cmd_adapters_audit(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.adapters import (
-        ollama_adapter, litellm_adapter, markitdown_adapter, otel_exporter, duckdb_adapter,
-        qdrant_adapter, phoenix_exporter, langfuse_exporter, mlflow_exporter, pydantic_ai_bridge,
-        vllm_provider, mcp_adapter,
-    )
-
-    report = {
-        "ollama": ollama_adapter.OllamaAdapter().audit(),
-        "litellm": litellm_adapter.LiteLLMAdapter().audit(),
-        "markitdown": markitdown_adapter.MarkItDownAdapter().audit(),
-        "otel": otel_exporter.OtelExporter(config).audit(),
-        "duckdb": duckdb_adapter.DuckDBAdapter(config).audit(),
-        "qdrant": qdrant_adapter.QdrantAdapter().audit(),
-        "phoenix": phoenix_exporter.PhoenixExporter(config).audit(),
-        "langfuse": langfuse_exporter.LangfuseExporter(config).audit(),
-        "mlflow": mlflow_exporter.MLflowExporter(config).audit(),
-        "pydantic_ai": pydantic_ai_bridge.audit(),
-        "vllm": vllm_provider.VLLMProvider().audit(),
-        "mcp": mcp_adapter.audit(),
-    }
-    if args.format == "json":
-        print(json.dumps(report, indent=2))
-    else:
-        for name, status in report.items():
-            print(f"{name}\tavailable={status['available']}")
-    return 0
-
-
-def cmd_ingest(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.adapters.markitdown_adapter import MarkItDownAdapter
-    from memory_os.core.file_policy import load_export_ignore_patterns, resolve_ingest_path
-
-    export_ignore_patterns = load_export_ignore_patterns(config.root_dir)
-    resolved_path, decision = resolve_ingest_path(
-        args.path,
-        config.root_dir,
-        allow_outside_root=args.allow_outside_root,
-        include_private=args.include_private,
-        export_ignore_patterns=export_ignore_patterns,
-    )
-    if not decision.allowed:
-        result = {
-            "ok": False,
-            "detail": decision.reason,
-            "source_path": args.path,
-        }
-    else:
-        result = MarkItDownAdapter().convert(
-            str(resolved_path),
-            dry_run=not args.write,
-            allowed_root=config.root_dir,
-            allow_outside_root=args.allow_outside_root,
-        )
-    if args.format == "json":
-        print(json.dumps(result, indent=2))
-    else:
-        if not result["ok"]:
-            print(f"Error: {result['detail']}")
-        else:
-            print(f"Converted {result['source_path']} ({result['source_bytes']} bytes, sha256={result['source_sha256'][:16]})")
-            print(result["markdown_text"][:2000])
-    return 0 if result["ok"] else 1
-
-
-def cmd_observe(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.adapters.otel_exporter import OtelExporter
-
-    exporter = OtelExporter(config)
-    if args.observe_action == "status":
-        result = exporter.audit()
-    else:
-        result = exporter.export(dry_run=args.dry_run, sample_rate=args.sample_rate)
-    if args.format == "json":
-        print(json.dumps(result, indent=2))
-    else:
-        print(result)
-    return 0 if result.get("ok", True) else 1
-
-
-def cmd_analytics(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.adapters.duckdb_adapter import DuckDBAdapter
-
-    adapter = DuckDBAdapter(config)
-    if args.analytics_action == "report":
-        result = adapter.report(args.topic)
-    else:
-        result = adapter.export(format=args.export_format, dry_run=args.dry_run)
-    if args.format == "json":
-        print(json.dumps(result, indent=2))
-    else:
-        print(result)
-    return 0 if result.get("ok", True) else 1
-
-
-def cmd_mcp(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.adapters import mcp_adapter
-
-    if args.mcp_action == "manifest":
-        result = mcp_adapter.manifest()
-    elif args.mcp_action == "audit":
-        result = mcp_adapter.audit()
-    else:  # serve
-        result = mcp_adapter.serve(dry_run=not args.write)
-    print(json.dumps(result, indent=2))
-    return 0 if result.get("ok", True) else 1
-
-
-def cmd_run(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.run_records import RunRecordStore
-
-    store = RunRecordStore(config)
-    action = args.run_action
-    try:
-        if action == "start":
-            inputs = json.loads(args.inputs) if args.inputs else {}
-            record = store.start(args.workflow, inputs=inputs)
-        elif action == "status":
-            record = store.status(args.run_id)
-        elif action == "resume":
-            record = store.resume(args.run_id)
-        elif action == "complete":
-            outputs = json.loads(args.outputs) if args.outputs else {}
-            record = store.complete(args.run_id, outputs=outputs)
-        elif action == "list":
-            runs = store.list_runs()
-            if args.format == "json":
-                print(json.dumps(runs, indent=2))
-            else:
-                for r in runs:
-                    print(f"{r['run_id']}\t{r['workflow_name']}\t{r['status']}\tstep={r['current_step']}")
-            return 0
-        else:  # abort
-            record = store.abort(args.run_id)
-    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
-        print(f"Error: {exc}")
-        return 1
-
-    if args.format == "json":
-        print(json.dumps(record, indent=2))
-    else:
-        print(f"{record['run_id']}\t{record['workflow_name']}\t{record['status']}\tstep={record['current_step']}")
-    return 0
-
-
-def cmd_provider(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.routing_policy import RoutingPolicy
-
-    policy = RoutingPolicy(config)
-    if args.provider_action == "list":
-        providers = policy.list_providers()
-        if args.format == "json":
-            print(json.dumps(providers, indent=2))
-        else:
-            for p in providers:
-                print(f"{p['name']}\tinstalled={p['adapter_installed']}\tconfigured={p['configured']}")
-        return 0
-
-    # test
-    result = policy.test_provider(args.name)
-    if args.format == "json":
-        print(json.dumps(result, indent=2))
-    else:
-        print(f"{result['name']}: {'OK' if result['ok'] else 'NOT READY'} ({result['detail']})")
-    return 0 if result["ok"] else 1
-
-
-def cmd_prompt(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.prompt_registry import PromptRegistry
-
-    registry = PromptRegistry(config)
-    action = args.prompt_action
-
-    if action == "list":
-        prompts = registry.list_prompts()
-        if args.format == "json":
-            print(json.dumps(prompts, indent=2))
-        else:
-            for p in prompts:
-                print(f"{p['id']}\tv{p['version']}\t{p['sha256']}\t{p['purpose']}")
-        return 0
-
-    if action == "show":
-        try:
-            data = registry.show(args.id)
-        except FileNotFoundError as exc:
-            print(f"Error: {exc}")
-            return 1
-        if args.format == "json":
-            print(json.dumps(data, indent=2))
-        else:
-            print(f"# {data.get('id')} (v{data.get('version')}, {data.get('sha256')})")
-            print(f"Purpose: {data.get('purpose')}")
-            print(f"Inputs: {data.get('inputs')}  Outputs: {data.get('outputs')}")
-            print(f"Forbidden: {data.get('forbidden')}")
-            print()
-            print(data.get("body", ""))
-        return 0
-
-    if action == "render":
-        inputs = {}
-        for pair in args.input or []:
-            if "=" not in pair:
-                print(f"Error: --input expects key=value, got {pair!r}")
-                return 1
-            key, value = pair.split("=", 1)
-            inputs[key] = value
-        try:
-            rendered = registry.render(args.id, inputs)
-        except FileNotFoundError as exc:
-            print(f"Error: {exc}")
-            return 1
-        print(rendered)
-        return 0
-
-    # verify
-    result = registry.verify()
-    if args.format == "json":
-        print(json.dumps(result, indent=2))
-    else:
-        print(f"Prompt verify: {'OK' if result['ok'] else 'FAILED'}")
-        for err in result["errors"]:
-            print(f"  [!] {err}")
-    return 0 if result["ok"] else 1
-
-
-def cmd_idea(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.prompt_registry import PromptRegistry, idea_expand_dry_run
-
-    registry = PromptRegistry(config)
-    rendered = idea_expand_dry_run(registry, args.text)
-    if args.format == "json":
-        print(json.dumps({"text": args.text, "rendered_prompt": rendered}, indent=2))
-    else:
-        print(rendered)
-        print("\n(rendered only — no LLM call was made; pass this prompt to a provider yourself)")
-    return 0
-
-
-def cmd_security_scan(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.security_scan import SecurityScanner
-
-    try:
-        result = SecurityScanner(config).scan(profile=args.profile)
-    except ValueError as exc:
-        print(f"Error: {exc}")
-        return 1
-    if args.format == "json":
-        print(json.dumps(result, indent=2))
-    else:
-        print(f"Profile: {result['profile']}")
-        print(f"Scanned {len(result['scanned_files'])} file(s).")
-        print(f"Secrets: {result['secret_count']}  |  Prompt-injection markers: {result['injection_marker_count']}")
-        for f in result["findings"]:
-            print(f"  [!] {f['file']}:{f['line']} {f['category']}/{f['pattern']} -> {f['excerpt']}")
-    return 1 if (result["secret_count"] or result["injection_marker_count"]) else 0
-
-
-def cmd_review_pack(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.review_pack import ReviewPackBuilder, review_pack_to_markdown
-
-    builder = ReviewPackBuilder(config)
-    try:
-        pack = builder.build(args.task)
-    except FileNotFoundError as exc:
-        print(f"Error: {exc}")
-        return 1
-
-    if args.format == "json":
-        print(json.dumps(pack, indent=2))
-    else:
-        print(review_pack_to_markdown(pack))
-    return 0
-
-
-def cmd_change_size(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.review_pack import change_size_report
-
-    report = change_size_report(config)
-    if args.format == "json":
-        print(json.dumps(report, indent=2))
-    else:
-        print(f"Changed files: {report['file_count']}")
-        for w in report["warnings"]:
-            print(f"  [!] {w}")
-    return 0
-
-
-def cmd_compact(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.modules.compactor import MemoryCompactor
-    compactor = MemoryCompactor(config=config)
-    return compactor.compact_capsules(provider=args.provider, model=args.model)
-
-def cmd_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.repository import MemoryRepository
-    from memory_os.core.storage import FileSystemMemoryStorage
-    
-    repo = MemoryRepository(FileSystemMemoryStorage(), config)
-    repo.sync_graph_nodes()
-    print("Graph nodes successfully synced to SQLite FTS5.")
-    return 0
-
-def cmd_export_skills(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.skills_exporter import export_claude_skills
-    root = Path(args.root).resolve()
-    export_claude_skills(root)
-    return 0
-
-def cmd_compress(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    compactor = MemoryCompactor(config)
-    return compactor.compress_graph(provider=args.provider, model=args.model, dry_run=args.dry_run)
-
-def cmd_link_infer(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.link_inferrer import LinkInferrer
-    inferrer = LinkInferrer(config)
-    exclude = set(t.strip() for t in (args.exclude_types or "").split(",") if t.strip())
-    return inferrer.run(
-        method=args.method,
-        resource_mode=getattr(args, "resource_mode", None) or None,
-        dry_run=args.dry_run,
-        min_score=args.min_score,
-        provider=getattr(args, "provider", None),
-        model=getattr(args, "model", None),
-        batch_size=args.batch_size,
-        exclude_types=exclude or None,
-    )
-
-def cmd_pipeline(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.pipeline import PipelineRunner
-    runner = PipelineRunner(config)
-    return runner.run(
-        pipeline_name=args.name,
-        custom_steps=getattr(args, "steps", None),
-        notion_key=getattr(args, "notion_key", None),
-        notion_db=getattr(args, "notion_db", None),
-        provider=getattr(args, "provider", None),
-        model=getattr(args, "model", None),
-        dry_run=args.dry_run,
-    )
-
-def cmd_prune(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    lifecycle = LifecycleManager(config)
-    return lifecycle.prune()
-
-def cmd_transition(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    lifecycle = LifecycleManager(config)
-    ret = lifecycle.transition(validator=args.validator)
-    if ret != 0:
-        return ret
-    if args.prune:
-        lifecycle.prune()
-    lifecycle.manifest()
-    print("Lifecycle transition complete.")
-    return 0
-
-def cmd_graph_map(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.graph_mapper import GraphMapper
-
-    mapper = GraphMapper(config)
-    result = mapper.run(emit_nodes=args.emit_nodes)
-
-    if result["status"] == "error":
-        print(f"Error: {result['reason']}", file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print(json.dumps(result, indent=2, ensure_ascii=False, default=list))
-        return 0
-
-    print(f"Codebase map written to: {result['output']}")
-    print(f"Files indexed: {result['total_files']}")
-
-    god_nodes = result.get("god_nodes", [])
-    if god_nodes:
-        print(f"\nGod nodes ({len(god_nodes)}):")
-        for node in god_nodes:
-            print(f"  {node['in_degree']:>3}x  {node['file']}  [{node['layer']}]")
-    else:
-        print("\nNo god nodes found — run `memory_os snapshot --write` first.")
-
-    clusters = result.get("clusters", [])
-    if clusters:
-        print(f"\nModule clusters ({len(clusters)}):")
-        for c in clusters:
-            print(f"  {c['name']}/  ({c['file_count']} files, {c['internal_edges']} internal edges)")
-
-    if args.emit_nodes:
-        print("\nCluster nodes emitted to memory/nodes.jsonl.")
-
-    return 0
-
-def cmd_triage(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.storage import FileSystemMemoryStorage
-
-    storage = FileSystemMemoryStorage()
-    nodes_path = config.memory_dir / "nodes.jsonl"
-    events_path = config.memory_dir / "events.jsonl"
-
-    nodes = storage.load_jsonl(nodes_path)
-    draft_nodes = [n for n in nodes if n["status"] == "draft"]
-
-    if not draft_nodes:
-        print("No draft nodes to triage.")
-        return 0
-
-    verified_nodes = [n for n in nodes if n["status"] == "verified"]
-
-    def _word_overlap(a: str, b: str) -> float:
-        wa = set(a.lower().split())
-        wb = set(b.lower().split())
-        if not wa or not wb:
-            return 0.0
-        return len(wa & wb) / len(wa | wb)
-
-    non_interactive = args.dry_run or not sys.stdin.isatty()
-    if non_interactive:
-        print(f"{len(draft_nodes)} draft node(s) pending triage:")
-        for n in draft_nodes:
-            print(f"  [{n['id']}] ({n['type']}) {n['summary'][:80]}")
-        return 0
-
-    approved = rejected = skipped = 0
-    updates: Dict[str, Any] = {}
-    new_events = []
-
-    print(f"\n=== Memory OS Triage ({len(draft_nodes)} draft nodes) ===")
-    print("y = approve  |  n = reject  |  s = skip  |  t tag1,tag2 = tag+approve\n")
-
-    for idx, node in enumerate(draft_nodes, 1):
-        print(f"[{idx}/{len(draft_nodes)}]  {node['id']}  ({node['type']})")
-        print(f"  Summary : {node['summary']}")
-        if node.get("tags"):
-            print(f"  Tags    : {', '.join(node['tags'])}")
-        if node.get("evidence"):
-            print(f"  Evidence: {', '.join(node['evidence'])}")
-
-        similar = sorted(
-            [(v["id"], _word_overlap(node["summary"], v["summary"])) for v in verified_nodes],
-            key=lambda x: -x[1],
-        )
-        similar = [(nid, s) for nid, s in similar if s >= 0.4]
-        if similar:
-            print(f"  ⚠  Similar verified: {similar[0][0]} ({similar[0][1]:.0%} overlap)")
-
-        while True:
-            try:
-                answer = input("  > ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\nTriage interrupted.")
-                break
-            al = answer.lower()
-            if al == "y":
-                updates[node["id"]] = {"status": "observed", "action": "approved", "tags": []}
-                approved += 1
-                break
-            elif al == "n":
-                updates[node["id"]] = {"status": "stale", "action": "rejected", "tags": []}
-                rejected += 1
-                break
-            elif al == "s":
-                skipped += 1
-                break
-            elif al.startswith("t"):
-                tag_str = answer[1:].strip().strip(",")
-                new_tags = [t.strip() for t in tag_str.split(",") if t.strip()]
-                updates[node["id"]] = {"status": "observed", "action": "tagged", "tags": new_tags}
-                approved += 1
-                break
-            else:
-                print("  y / n / s / t tag1,tag2")
-
-    if updates:
-        now = datetime.now().isoformat(timespec="seconds")
-        updated_nodes = []
-        for node in nodes:
-            upd = updates.get(node["id"])
-            if upd:
-                node = dict(node)
-                node["status"] = upd["status"]
-                if upd.get("tags"):
-                    merged = list(dict.fromkeys(node.get("tags", []) + upd["tags"]))
-                    node["tags"] = merged
-                new_events.append({
-                    "timestamp": now,
-                    "event": "memory.node.triaged",
-                    "node_id": node["id"],
-                    "claim": f"Human triage: {upd['action']} → {upd['status']}",
-                    "evidence": node.get("evidence", []),
-                    "validator": "human_triage",
-                    "status": "accepted" if upd["action"] != "rejected" else "rejected",
-                    "action": upd["action"],
-                })
-            updated_nodes.append(node)
-        storage.save_jsonl(nodes_path, updated_nodes)
-        for ev in new_events:
-            storage.append_jsonl(events_path, ev)
-
-    print(f"\nTriage complete: {approved} approved, {rejected} rejected, {skipped} skipped.")
-    if approved:
-        print("Hint: run `memory_os transition` to promote observed → verified.")
-    return 0
-
-
-def cmd_query(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.storage import FileSystemMemoryStorage
-
-    storage = FileSystemMemoryStorage()
-    nodes_path = config.memory_dir / "nodes.jsonl"
-    internal_nodes_path = config.internal_memory_dir / "nodes.jsonl"
-
-    nodes = storage.load_jsonl(nodes_path)
-    if storage.exists(internal_nodes_path):
-        nodes += storage.load_jsonl(internal_nodes_path)
-
-    results = nodes
-    if args.type:
-        results = [n for n in results if n.get("type") == args.type]
-    if args.trust:
-        results = [n for n in results if n.get("trust") == args.trust]
-    if args.status:
-        results = [n for n in results if n.get("status") == args.status]
-    if args.tag:
-        tl = args.tag.lower()
-        results = [n for n in results if any(tl == t.lower() for t in n.get("tags", []))]
-    if args.since:
-        results = [n for n in results if n.get("freshness", "") >= args.since]
-
-    if not results:
-        print("No nodes match the given filters.")
-        return 0
-
-    if args.json:
-        print(json.dumps(results, indent=2, ensure_ascii=False))
-        return 0
-
-    print(f"Found {len(results)} node(s):\n")
-    for node in results:
-        print(f"[{node['id']}]  ({node['type']})")
-        print(f"  Summary  : {node['summary']}")
-        print(f"  Status   : {node['status']} | Trust: {node['trust']} | Freshness: {node.get('freshness', 'N/A')}")
-        if node.get("tags"):
-            print(f"  Tags     : {', '.join(node['tags'])}")
-        if node.get("evidence"):
-            print(f"  Evidence : {', '.join(node['evidence'])}")
-        print()
-    return 0
-
-
-def cmd_backlinks(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.storage import FileSystemMemoryStorage
-
-    storage = FileSystemMemoryStorage()
-    nodes_path = config.memory_dir / "nodes.jsonl"
-    edges_path = config.memory_dir / "edges.jsonl"
-
-    nodes = storage.load_jsonl(nodes_path)
-    edges = storage.load_jsonl(edges_path)
-
-    target_id = args.node_id
-    all_ids = {n["id"] for n in nodes}
-    if target_id not in all_ids:
-        print(f"Node '{target_id}' not found in nodes.jsonl.")
-        return 1
-
-    inbound_edges = [e for e in edges if e.get("target") == target_id]
-    edge_source_ids = {e["source"] for e in inbound_edges}
-
-    related_refs = [
-        n for n in nodes
-        if target_id in n.get("related_nodes", []) and n["id"] != target_id
-    ]
-    related_ref_ids = {n["id"] for n in related_refs}
-
-    textual_refs = [
-        n for n in nodes
-        if n["id"] != target_id
-        and n["id"] not in edge_source_ids
-        and n["id"] not in related_ref_ids
-        and target_id in n.get("summary", "")
-    ]
-
-    if not inbound_edges and not related_refs and not textual_refs:
-        print(f"No backlinks found for '{target_id}'.")
-        return 0
-
-    if args.json:
-        print(json.dumps({
-            "target": target_id,
-            "inbound_edges": inbound_edges,
-            "related_node_refs": [n["id"] for n in related_refs],
-            "textual_refs": [n["id"] for n in textual_refs],
-        }, indent=2, ensure_ascii=False))
-        return 0
-
-    nodes_by_id = {n["id"]: n for n in nodes}
-    print(f"Backlinks for '{target_id}':\n")
-
-    if inbound_edges:
-        print(f"Edges pointing here ({len(inbound_edges)}):")
-        for e in inbound_edges:
-            src = nodes_by_id.get(e["source"], {})
-            print(f"  [{e['source']}] --{e['type']}--> {target_id}")
-            if src.get("summary"):
-                print(f"    {src['summary'][:90]}")
-        print()
-
-    if related_refs:
-        print(f"related_nodes references ({len(related_refs)}):")
-        for n in related_refs:
-            print(f"  [{n['id']}]  {n['summary'][:90]}")
-        print()
-
-    if textual_refs:
-        print(f"Textual mentions without edge ({len(textual_refs)}):")
-        for n in textual_refs:
-            print(f"  [{n['id']}]  {n['summary'][:90]}")
-        print("  Hint: consider adding edges to formalise these relationships.")
-
-    return 0
-
-
-def cmd_unlinked(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.storage import FileSystemMemoryStorage
-
-    storage = FileSystemMemoryStorage()
-    nodes_path = config.memory_dir / "nodes.jsonl"
-    edges_path = config.memory_dir / "edges.jsonl"
-    capsules_path = config.capsules_file
-
-    nodes = storage.load_jsonl(nodes_path)
-    edges = storage.load_jsonl(edges_path)
-
-    all_node_ids = [n["id"] for n in nodes]
-    edge_pairs = {(e["source"], e["target"]) for e in edges}
-    edge_pairs |= {(e["target"], e["source"]) for e in edges}
-
-    findings: List[Dict[str, Any]] = []
-
-    for node in nodes:
-        summary = node.get("summary", "")
-        for other_id in all_node_ids:
-            if other_id == node["id"]:
-                continue
-            if other_id in summary and (node["id"], other_id) not in edge_pairs:
-                findings.append({
-                    "source": node["id"],
-                    "mentioned": other_id,
-                    "context": "node_summary",
-                    "snippet": summary[:120],
-                })
-
-    if storage.exists(capsules_path):
-        capsules = storage.load_jsonl(capsules_path)
-        for cap in capsules:
-            ts = cap.get("timestamp", "?")
-            full_text = " ".join([
-                cap.get("task", ""),
-                cap.get("hurdles_regression", ""),
-                cap.get("resolution", ""),
-                cap.get("lessons_learned", ""),
-            ])
-            for node_id in all_node_ids:
-                if node_id in full_text:
-                    findings.append({
-                        "source": f"capsule:{ts}",
-                        "mentioned": node_id,
-                        "context": "task_capsule",
-                        "snippet": full_text[:120],
-                    })
-
-    if not findings:
-        print("No unlinked mentions found.")
-        return 0
-
-    if args.json:
-        print(json.dumps(findings, indent=2, ensure_ascii=False))
-        return 0
-
-    print(f"Found {len(findings)} unlinked mention(s):\n")
-    for f in findings:
-        print(f"  {f['source']}  mentions  [{f['mentioned']}]  (via {f['context']})")
-        print(f"  └ {f['snippet'][:100]}")
-        print()
-    print("Run `memory_os backlinks <node-id>` for details, then add edges to formalise.")
-    return 0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 try:
@@ -1266,712 +265,59 @@ except ImportError:
     cmd_ide_grant = None
 
 
-def cmd_stats(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    import yaml
-    os_kernel = MemoryOS(config)
-    conn = os_kernel.get_connection()
-    try:
-        cur = conn.cursor()
-        
-        cur.execute("SELECT COUNT(*), SUM(cost), SUM(input_tokens), SUM(output_tokens), AVG(latency_ms) FROM memory_os_telemetry")
-        total_row = cur.fetchone()
-        totals = {
-            "calls": total_row[0] or 0,
-            "cost_usd": round(total_row[1] or 0, 5) if total_row[1] else 0.0,
-            "input_tokens": total_row[2] or 0,
-            "output_tokens": total_row[3] or 0,
-            "avg_latency_ms": round(total_row[4] or 0, 1) if total_row[4] else 0.0
-        }
-        
-        cur.execute("SELECT provider_id, model_id, COUNT(*), SUM(cost) FROM memory_os_telemetry GROUP BY provider_id, model_id")
-        models = []
-        for row in cur.fetchall():
-            models.append({
-                "provider": row[0],
-                "model": row[1],
-                "calls": row[2],
-                "cost_usd": round(row[3] or 0, 5) if row[3] else 0.0
-            })
-            
-        cur.execute("SELECT prompt_name, COUNT(*), AVG(latency_ms) FROM memory_os_telemetry GROUP BY prompt_name")
-        prompts = []
-        for row in cur.fetchall():
-            prompts.append({
-                "prompt": row[0],
-                "calls": row[1],
-                "avg_latency_ms": round(row[2] or 0, 1) if row[2] else 0.0
-            })
-            
-        report = {
-            "Total": totals,
-            "By_Model": models,
-            "By_Prompt": prompts
-        }
-        print(yaml.safe_dump(report, default_flow_style=False, sort_keys=False))
-        return 0
-    finally:
-        conn.close()
-
-def cmd_rag(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    import yaml
-    root = config.root_dir
-    searcher = MemorySearcher(config)
-    
-    results = searcher.search_memory(args.query, depth=1)
-    if not results:
-        print("No rules found for this context.")
-        return 0
-        
-    formatted = []
-    for r in results[:5]: # Take top 5 to save tokens
-        node_data = {
-            "id": r.get("id"),
-            "summary": r.get("summary")
-        }
-        if "match_snippet" in r:
-            node_data["match_snippet"] = r["match_snippet"]
-        formatted.append(node_data)
-        
-    output_path = root / "agent_context" / "active_memory.yaml"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        yaml.safe_dump({"active_context": formatted}, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-        
-    print(f"Wrote {len(formatted)} memory nodes to {output_path.relative_to(root)}")
-    return 0
-
-def cmd_ingest_transcript(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.transcript_ingestor import TranscriptIngestor
-    ingestor = TranscriptIngestor(config)
-    transcript_path = Path(args.log_file).resolve()
-    print(f"Parsing transcript {transcript_path.name}...")
-    capsules = ingestor.ingest(transcript_path, args.provider, args.model)
-    print(f"Extracted {len(capsules)} task capsules.")
-    for c in capsules:
-        print(f"- {c.get('task')}")
-    return 0
-
-def cmd_compile_prompt(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.prompt_compiler import compile_context
-    root = Path(args.root).resolve()
-    print(compile_context(root))
-    return 0
-
-def cmd_persona_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.modules.persona import PersonaManager
-    pm = PersonaManager(config.persona_memory_dir)
-    transcript_path = Path(args.log_file).resolve()
-    
-    print(f"Extracting persona from {transcript_path.name}...")
-    success = pm.sync_from_transcript(transcript_path, args.provider, args.model)
-    if success:
-        print(f"Persona successfully synced to {config.persona_memory_dir / 'persona.yaml'}")
-        return 0
-    else:
-        print("Failed to sync persona.")
-        return 1
-
-
-
-def cmd_persona(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.modules.persona import PersonaManager
-    pm = PersonaManager(config.persona_memory_dir)
-    print(pm.get_persona())
-    return 0
-
-def cmd_search(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    searcher = MemorySearcher(config)
-
-    matches = searcher.search_memory(args.query, args.depth)
-
-    if args.json:
-        print(json.dumps(matches, indent=2))
-    else:
-        nodes = [m for m in matches if m["type"] != "code_file"]
-        code_files = [m for m in matches if m["type"] == "code_file"]
-
-        if not nodes and not code_files:
-            print(f"No matches found for query '{args.query}'")
-            return 0
-
-        if nodes:
-            print(f"Found {len(nodes)} matched memory nodes:")
-            for node in nodes:
-                print(f"\n[{node['id']}] ({node['type']})")
-                print(f"  Summary: {node['summary']}")
-                if "match_snippet" in node:
-                    print(f"  Snippet: {node['match_snippet']}")
-                print(f"  Status: {node['status']} | Trust: {node['trust']}")
-                if node.get("evidence"):
-                    print(f"  Evidence: {', '.join(node['evidence'])}")
-
-        if code_files:
-            if nodes:
-                print("\n" + "="*50 + "\n")
-            print(f"Found {len(code_files)} matched codebase files:")
-            for item in code_files:
-                print(f"\n[{item['id']}] ({item['layer']}) - Rank {item['rank']} ({item['match_type']})")
-                if item.get("classes"):
-                    print(f"  Classes: {', '.join(item['classes'])}")
-                if item.get("functions"):
-                    print(f"  Functions: {', '.join(item['functions'])}")
-                if item.get("routes"):
-                    print(f"  Routes: {', '.join(item['routes'])}")
-                if item.get("dependencies"):
-                    print(f"  Dependencies: {', '.join(item['dependencies'])}")
-                if item.get("headings"):
-                    print(f"  Headings: {', '.join(item['headings'])}")
-                preview = item["summary"][:240]
-                print(f"  Preview: {preview}...")
-    return 0
-
-def cmd_analyze_os(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.config import MemoryOSConfig
-    from memory_os.toolkit.analyzer import OSPerformanceAnalyzer
-    import sys
-    
-    root = Path(args.root).resolve()
-    
-    analyzer = OSPerformanceAnalyzer(config)
-    print("Gathering local telemetry and performance digest...")
-    result = analyzer.generate_insights()
-    
-    if result["status"] == "error":
-        print(f"Error generating insights: {result['reason']}", file=sys.stderr)
-        return 1
-    elif result["status"] == "skipped":
-        print(f"Skipped: {result['reason']}")
-        return 0
-        
-    print(f"Success! Generated {result['created_proposals']} new performance insights.")
-    print("Review them in agent_proposals/admin_proposals.jsonl.")
-    if args.verbose:
-        print("\n--- DIGEST SENT TO LLM ---")
-        print(result["digest"])
-    return 0
-
-def cmd_giant_scan(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.giant_scan import GiantScanRunner
-
-    root = Path(args.root).resolve()
-
-    runner = GiantScanRunner(config)
-    result = runner.run(
-        provider=args.provider,
-        model=args.model,
-        force=args.force,
-        dry_run=args.dry_run,
-        target_dir=args.target_dir,
-    )
-
-    if args.format == "json":
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-    else:
-        from memory_os.toolkit.giant_scan import _print_markdown
-        _print_markdown(result)
-
-    return 0 if result.get("status") in ("success", "dry_run") else 1
-
-def cmd_daemon(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    import subprocess
-    import signal
-    import urllib.request
-    root = Path(args.root).resolve()
-    data_dir = root / "data"
-    pid_file = data_dir / "daemon.pid"
-    
-    def send_daemon_request(port: int, path: str, method: str = "GET") -> Optional[dict]:
-        url = f"http://127.0.0.1:{port}{path}"
-        req = urllib.request.Request(url, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except Exception:
-            return None
-
-    if args.daemon_action == "start":
-        if pid_file.exists():
-            print("Daemon is already running (PID file exists).")
-            return 1
-            
-        transcript_path = args.log_file or str(root / "agent_context" / "transcript.jsonl")
-        
-        command = [sys.executable, "-m", "memory_os", "--root", str(root), "_run_daemon_blocking", str(transcript_path)]
-        popen_kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-        if sys.platform == "win32":
-            popen_kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            popen_kwargs["start_new_session"] = True
-        process = subprocess.Popen(command, **popen_kwargs)
-        print(f"Daemon started with PID {process.pid}. Run 'python -m memory_os monitor' to view logs.")
-        return 0
-        
-    elif args.daemon_action == "stop":
-        # First try to stop gracefully via HTTP IPC
-        port = config.daemon_port
-        res = send_daemon_request(port, "/stop", method="POST")
-        if res and res.get("status") == "stopping":
-            print("Daemon stopped gracefully via IPC.")
-            return 0
-            
-        if not pid_file.exists():
-            print("Daemon is not running.")
-            return 1
-        pid = int(pid_file.read_text().strip())
-        try:
-            os.kill(pid, signal.SIGTERM)
-            print(f"Sent SIGTERM to daemon (PID {pid}).")
-            if sys.platform == "win32":
-                # TerminateProcess is abrupt on Windows — finally blocks in the daemon
-                # won't run, so clean up the PID file here.
-                pid_file.unlink(missing_ok=True)
-        except ProcessLookupError:
-            print("Process not found, cleaning up stale PID file.")
-            pid_file.unlink()
-        return 0
-        
-    elif args.daemon_action == "status":
-        port = config.daemon_port
-        res = send_daemon_request(port, "/status")
-        if res:
-            print(f"Daemon is RUNNING (PID {res.get('pid')})")
-            print("\nDaemon Details (via IPC):")
-            print(f"  Last Activity : {res.get('last_activity_time', 'N/A')}")
-            print(f"  Last Ingestion: {res.get('last_ingestion_time', 'N/A')}")
-            err = res.get('last_ingestion_error')
-            if err:
-                print(f"  Last Ingestion Error: {err} (at {res.get('last_ingestion_error_time', 'N/A')})")
-            print(f"  Watched File  : {res.get('config', {}).get('transcript_path', 'N/A')}")
-            print(f"  IPC Port      : {res.get('config', {}).get('daemon_port', 'N/A')}")
-            return 0
-
-        # Fallback if IPC unreachable
-        status_file = data_dir / "daemon_status.json"
-        is_running = False
-        pid = None
-        if pid_file.exists():
-            try:
-                pid = int(pid_file.read_text().strip())
-                os.kill(pid, 0)
-                is_running = True
-            except OSError:
-                pass
-                
-        if is_running:
-            print(f"Daemon is RUNNING (PID {pid})")
-        else:
-            print("Daemon is STOPPED")
-            
-        if status_file.exists():
-            try:
-                status_data = json.loads(status_file.read_text(encoding="utf-8"))
-                print("\nDaemon Details (fallback):")
-                print(f"  Last Activity : {status_data.get('last_activity_time', 'N/A')}")
-                print(f"  Last Ingestion: {status_data.get('last_ingestion_time', 'N/A')}")
-                err = status_data.get('last_ingestion_error')
-                if err:
-                    print(f"  Last Ingestion Error: {err} (at {status_data.get('last_ingestion_error_time', 'N/A')})")
-                print(f"  Watched File  : {status_data.get('config', {}).get('transcript_path', 'N/A')}")
-            except Exception as e:
-                print(f"  Could not read status file: {e}")
-        return 0 if is_running else 1
-
-    elif args.daemon_action == "sync":
-        port = config.daemon_port
-        res = send_daemon_request(port, "/sync", method="POST")
-        if res and res.get("status") == "sync_triggered":
-            print("Daemon sync triggered successfully via IPC.")
-            return 0
-        print("Could not contact daemon via IPC. Is the daemon running?")
-        return 1
-    return 0
-
-def cmd_run_daemon_blocking(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.daemon import MemoryDaemon
-    root = Path(args.root).resolve()
-    transcript_path = Path(args.log_file).resolve()
-    daemon = MemoryDaemon(config, transcript_path)
-    daemon.run()
-    return 0
-
-def cmd_review(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.core import MemoryOS
-    from memory_os.core.models import MemoryNode
-    db = MemoryOS(config)
-    conn = db.get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, type, summary FROM graph_nodes WHERE valid_to IS NULL AND status = 'draft'")
-        drafts = cursor.fetchall()
-        if not drafts:
-            print("No draft nodes pending review in SQLite.")
-            return 0
-            
-        print(f"Found {len(drafts)} nodes pending review:")
-        for row in drafts:
-            print(f"[{row['id']}] ({row['type']}) - {row['summary']}")
-        return 0
-    finally:
-        conn.close()
-
-def cmd_approve(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.core import MemoryOS
-    db = MemoryOS(config)
-    conn = db.get_connection()
-    node_id = args.node_id
-    
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM graph_nodes WHERE id = ? AND valid_to IS NULL AND status = 'draft'", (node_id,))
-        if not cursor.fetchone():
-            print(f"Node {node_id} is either not found, not active, or not in 'draft' status.")
-            return 1
-            
-        conn.execute("UPDATE graph_nodes SET status = 'verified', trust = 'verified' WHERE id = ? AND valid_to IS NULL", (node_id,))
-        conn.commit()
-        print(f"Node {node_id} successfully approved and marked as verified.")
-        return 0
-    except Exception as e:
-        print(f"Failed to approve node {node_id}: {e}")
-        return 1
-    finally:
-        conn.close()
-
-def cmd_db_optimize(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.core import MemoryOS
-    db = MemoryOS(config)
-    print("Optimizing database... This may take a moment depending on DB size.")
-    try:
-        db.optimize_db()
-        print("Database successfully optimized and vacuumed.")
-        return 0
-    except Exception as e:
-        print(f"Failed to optimize database: {e}")
-        return 1
-
-def cmd_monitor(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    import time
-    root = Path(args.root).resolve()
-    log_file = root / "data" / "daemon.log"
-    
-    if not log_file.exists():
-        print(f"Log file {log_file} does not exist yet. Is the daemon running?")
-        return 1
-        
-    print(f"Tailing {log_file}... (Press Ctrl+C to stop)")
-    with open(log_file, "r", encoding="utf-8") as f:
-        if not getattr(args, 'all', False):
-            f.seek(0, 2)
-        try:
-            while True:
-                line = f.readline()
-                if not line:
-                    time.sleep(0.5)
-                    continue
-                print(line, end="")
-        except KeyboardInterrupt:
-            print("\nMonitor stopped.")
-    return 0
-
-
-def cmd_export_obsidian(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.obsidian_exporter import export_obsidian_vault
-    nodes_path = config.internal_memory_dir / 'nodes.jsonl'
-    edges_path = config.internal_memory_dir / 'edges.jsonl'
-    root_dir = Path(config.root_dir)
-    success = export_obsidian_vault(root_dir, nodes_path, edges_path)
-    return 0 if success else 1
-
-def cmd_linear_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.linear_sync import sync_roadmap_with_linear
-    root_dir = Path(config.root_dir)
-    success = sync_roadmap_with_linear(root_dir)
-    return 0 if success else 1
-
-def cmd_notion_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.notion_sync import sync_with_notion
-    success = sync_with_notion(
-        config=config,
-        notion_api_key=args.api_key,
-        notion_database_id=args.database_id,
-        to_capsules=args.to_capsules
-    )
-    return 0 if success else 1
-
-def cmd_gdrive_sync(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.toolkit.gdrive_sync import sync_with_gdrive
-    success = sync_with_gdrive(
-        config=config,
-        access_token=args.token,
-        folder_id=args.folder_id,
-        to_capsules=args.to_capsules
-    )
-    return 0 if success else 1
-
-def cmd_ui(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.ui import run_ui_server
-    run_ui_server(config, port=args.port)
-    return 0
 
 
 
 
 
-def cmd_resources(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.disk_guard import DiskGuard
-    from memory_os.core.write_budget import ArtifactWriteBudget
-
-    guard = DiskGuard(config)
-    write_budget = ArtifactWriteBudget(config)
-    action = getattr(args, "resources_action", None) or "snapshot"
-
-    if action == "compact":
-        result = guard.compact(dry_run=args.dry_run)
-        if args.format == "json":
-            print(json.dumps(result, indent=2))
-        else:
-            print("=== Memory OS Resource Compact" + (" (dry-run)" if args.dry_run else "") + " ===\n")
-            checkpoint = result["checkpoint"]
-            print(f"  WAL checkpoint : {'OK' if checkpoint.get('ok') else 'FAILED'}")
-            if not checkpoint.get("ok"):
-                print(f"  Detail         : {checkpoint.get('detail')}")
-            print(f"  Resource level : {result['snapshot']['level'].upper()}")
-        return 0 if result.get("ok") else 1
-
-    if action == "checkpoint":
-        result = guard.checkpoint_sqlite(truncate=not args.no_truncate, dry_run=args.dry_run)
-        if args.format == "json":
-            print(json.dumps(result, indent=2))
-        else:
-            print("=== SQLite WAL Checkpoint" + (" (dry-run)" if args.dry_run else "") + " ===\n")
-            print(f"  Status : {'OK' if result.get('ok') else 'FAILED'}")
-            before = result.get("before", {})
-            after = result.get("after", {})
-            print(f"  WAL    : {before.get('wal_mb', 0.0)} MB -> {after.get('wal_mb', before.get('wal_mb', 0.0))} MB")
-            if not result.get("ok"):
-                print(f"  Detail : {result.get('detail')}")
-        return 0 if result.get("ok") else 1
-
-    snap = guard.snapshot()
-    write_status = write_budget.status()
-
-    if args.format == "json":
-        result = snap.to_dict()
-        result["write_budget"] = write_status.to_dict()
-        print(json.dumps(result, indent=2))
-    else:
-        print("=== Memory OS Resources ===\n")
-        print(f"  Free disk space    : {snap.free_disk_mb:,.1f} MB" + ("  [!] below min_free_disk_mb" if snap.low_disk else ""))
-        print(f"  SQLite DB          : {snap.sqlite.db_mb} MB" + ("  [!] exceeds max_sqlite_db_mb" if snap.sqlite.exceeds_max_db else ""))
-        print(f"  SQLite WAL         : {snap.sqlite.wal_mb} MB" + ("  [!] exceeds max_sqlite_wal_mb" if snap.sqlite.exceeds_max_wal else ""))
-        print(f"  SQLite SHM         : {snap.sqlite.shm_mb} MB")
-        print(f"  JSONL source files : {snap.jsonl_total_mb} MB" + ("  [!] exceeds max_jsonl_total_mb" if snap.exceeds_max_jsonl else ""))
-        growth = f"{snap.growth_mb_per_hour} MB/hr" if snap.growth_mb_per_hour is not None else "n/a (no prior snapshot)"
-        print(f"  Growth rate        : {growth}" + ("  [!] exceeds max_observed_growth_mb_per_hour" if snap.growth_alert else ""))
-        write_flag = "  [!] over cap" if not write_status.ok else ""
-        print(f"  Agent artifacts    : {write_status.agent_context_mb} MB / {write_status.max_agent_context_mb} MB, {write_status.agent_context_files}/{write_status.max_agent_context_files} files{write_flag}")
-        print(f"\nResource level: {snap.level.upper()}")
-
-    return 1 if snap.level == "hot" or not write_status.ok else 0
 
 
-def cmd_telemetry(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.telemetry_policy import TelemetryPolicy
-
-    db = MemoryOS(config)
-    policy = TelemetryPolicy(config, db_path=db.db_path)
-    conn = db.get_connection()
-    try:
-        if args.telemetry_action == "audit":
-            report = policy.audit(conn)
-            if args.format == "json":
-                print(json.dumps(report, indent=2))
-            else:
-                print("=== Telemetry Audit ===\n")
-                db_flag = "  [!] OVER CAP" if report["db_over_cap"] else ("  [!] approaching cap" if report["db_warn_cap"] else "")
-                print(f"  Enabled   : {report['enabled']}")
-                print(f"  DB size   : {report['db_mb']} MB / {report['max_db_mb']} MB cap{db_flag}")
-                print(f"  Retention : {report['retention_days']} days\n")
-                for t in report["tables"]:
-                    flag = "  [!] OVER CAP" if t["over_cap"] else ("  [!] approaching cap" if t["warn_cap"] else "")
-                    print(f"  {t['table']:<24}: {t['row_count']}/{t['max_rows']} rows{flag}")
-            return 1 if (report["db_over_cap"] or any(t["over_cap"] for t in report["tables"])) else 0
-
-        # prune
-        results = {}
-        for table in ("memory_os_telemetry", "memory_os_performance"):
-            if args.dry_run:
-                budget = policy.table_budget(conn, table)
-                results[table] = {
-                    "over_cap": budget.over_cap,
-                    "row_count": budget.row_count,
-                    "max_rows": budget.max_rows,
-                    "dry_run": True,
-                }
-            else:
-                results[table] = policy.prune(conn, table)
-        if args.format == "json":
-            print(json.dumps(results, indent=2))
-        else:
-            print("=== Telemetry Prune" + (" (dry-run)" if args.dry_run else "") + " ===\n")
-            for table, r in results.items():
-                print(f"  {table}: {r}")
-        return 0
-    finally:
-        conn.close()
 
 
-def cmd_release_check(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    from memory_os.core.release_check import ReleaseChecker
-
-    try:
-        result = ReleaseChecker(config).run(target=args.target)
-    except ValueError as exc:
-        print(f"Error: {exc}")
-        return 1
-
-    if args.format == "json":
-        print(json.dumps(result, indent=2))
-    else:
-        print(f"=== Memory OS Release Check ({result['target']}) ===\n")
-        for check in result["checks"]:
-            status = "OK" if check["ok"] else ("WARN" if check["severity"] == "warning" else "FAIL")
-            print(f"  [{status}] {check['name']}: {check['detail']}")
-        print(f"\nResult: {'OK' if result['ok'] else 'FAILED'}")
-    return 0 if result["ok"] else 1
 
 
-def cmd_doctor(args: argparse.Namespace, config: MemoryOSConfig) -> int:
-    import sqlite3
-    root = config.root_dir
-    print("=== Memory OS Diagnostics (doctor) ===\n")
-    
-    ok = True
-    
-    # 1. Config Check
-    config_file = root / "memory_os.config.json"
-    if config_file.exists():
-        print(f"  [✓] Config file: Found at {config_file.relative_to(root)}")
-    else:
-        print("  [!] Config file: Missing! Using default developer profile.")
-        
-    # 2. Directories Check
-    dirs = ["memory", "agent_context", "workflows"]
-    for d in dirs:
-        dp = root / d
-        if dp.exists() and dp.is_dir():
-            print(f"  [✓] Directory '{d}': Exists")
-        else:
-            print(f"  [✗] Directory '{d}': Missing!")
-            ok = False
-            
-    # 3. Core Files Check
-    files = [
-        ("nodes.jsonl", config.memory_dir / "nodes.jsonl"),
-        ("edges.jsonl", config.memory_dir / "edges.jsonl"),
-        ("events.jsonl", config.memory_dir / "events.jsonl"),
-        ("task_capsules.jsonl", config.capsules_file),
-    ]
-    for name, path in files:
-        if path.exists():
-            print(f"  [✓] File '{name}': Exists ({path.stat().st_size} bytes)")
-        else:
-            print(f"  [✗] File '{name}': Missing!")
-            ok = False
-            
-    # 4. Database Check
-    db_path = config.db_path
-    if db_path.exists():
-        print(f"  [✓] SQLite DB: Found at {db_path.relative_to(root)}")
-        try:
-            conn = sqlite3.connect(str(db_path))
-            cur = conn.cursor()
-            
-            cur.execute("SELECT COUNT(*) FROM graph_nodes WHERE valid_to IS NULL")
-            nodes_count = cur.fetchone()[0]
-            
-            cur.execute("SELECT COUNT(*) FROM memory_os_telemetry")
-            telemetry_count = cur.fetchone()[0]
-            
-            print(f"      - Active nodes in SQLite: {nodes_count}")
-            print(f"      - Telemetry records: {telemetry_count}")
 
-            from memory_os.core.telemetry_policy import TelemetryPolicy
-            telemetry_report = TelemetryPolicy(config, db_path=db_path).audit(conn)
-            if telemetry_report["db_over_cap"]:
-                print(f"  [!] Telemetry: DB size {telemetry_report['db_mb']} MB exceeds max_db_mb cap ({telemetry_report['max_db_mb']} MB) — run 'memory_os telemetry prune'")
-            elif telemetry_report["db_warn_cap"]:
-                print(f"  [!] Telemetry: DB size {telemetry_report['db_mb']} MB approaching max_db_mb cap ({telemetry_report['max_db_mb']} MB)")
-            for t in telemetry_report["tables"]:
-                if t["over_cap"]:
-                    print(f"  [!] Telemetry: '{t['table']}' has {t['row_count']} rows, exceeds max_rows_per_table cap ({t['max_rows']}) — run 'memory_os telemetry prune'")
-                elif t["warn_cap"]:
-                    print(f"  [!] Telemetry: '{t['table']}' has {t['row_count']} rows, approaching max_rows_per_table cap ({t['max_rows']})")
 
-            conn.close()
-        except Exception as e:
-            print(f"  [✗] SQLite DB connection error: {e}")
-            ok = False
-    else:
-        print("  [✗] SQLite DB: Missing!")
-        ok = False
-        
-    # 5. API Keys Check (Secrets Shield!)
-    keys = ["GEMINI_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY"]
-    present_keys = [k for k in keys if os.environ.get(k)]
-    if present_keys:
-        print(f"  [✓] LLM API Keys configured: {', '.join(present_keys)}")
-    else:
-        print("  [!] LLM API Keys: None found in environment! (Background calls will fail)")
-        
-    # 5b. Disk / WAL health (DiskGuard)
-    from memory_os.core.disk_guard import DiskGuard
-    disk_snap = DiskGuard(config).snapshot()
-    if disk_snap.low_disk:
-        print(f"  [!] Disk: {disk_snap.free_disk_mb:,.1f} MB free — below min_free_disk_mb threshold")
-    else:
-        print(f"  [✓] Disk: {disk_snap.free_disk_mb:,.1f} MB free")
-    if disk_snap.sqlite.exceeds_max_wal:
-        print(f"  [!] SQLite WAL: {disk_snap.sqlite.wal_mb} MB — exceeds max_sqlite_wal_mb cap")
-    elif disk_snap.sqlite.wal_mb:
-        print(f"      - SQLite WAL: {disk_snap.sqlite.wal_mb} MB")
 
-    # 5c. Last evidence bundle status
-    evidence_dir = root / "agent_context" / "evidence"
-    bundles = sorted(evidence_dir.glob("*/bundle.json"), key=lambda p: p.stat().st_mtime) if evidence_dir.is_dir() else []
-    if bundles:
-        from memory_os.core.evidence import EvidenceStore
-        last_task = bundles[-1].parent.name
-        verify_result = EvidenceStore(config).verify(last_task)
-        status = "OK" if verify_result["ok"] else "NOT VERIFIED"
-        print(f"  [{'✓' if verify_result['ok'] else '!'}] Last evidence bundle: task '{last_task}' — {status}")
-        for reason in verify_result["reasons"]:
-            print(f"      - {reason}")
-    else:
-        print("  [ ] Last evidence bundle: none recorded yet")
 
-    # 6. Daemon Status Check
-    pid_file = root / "data" / "daemon.pid"
-    if pid_file.exists():
-        try:
-            pid = int(pid_file.read_text().strip())
-            try:
-                os.kill(pid, 0)
-                print(f"  [✓] Background Daemon: RUNNING (PID {pid})")
-            except OSError:
-                print(f"  [!] Background Daemon: PID file exists ({pid}) but process is dead.")
-        except Exception as e:
-            print(f"  [!] Background Daemon: Error checking PID file: {e}")
-    else:
-        print("  [ ] Background Daemon: STOPPED")
-        
-    print("")
-    if ok:
-        print("Doctor diagnostics: ALL CRITICAL PATHS OK")
-        return 0
-    else:
-        print("Doctor diagnostics: CRITICAL PATH ERRORS FOUND! Run 'memory_os init' to resolve.")
-        return 1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class _CleanHelpFormatter(argparse.HelpFormatter):
@@ -2002,6 +348,11 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.set_defaults(func=cmd_init)
 
     integrate_parser = subparsers.add_parser("integrate", help="Add minimal Memory OS agent instructions.")
+    integrate_parser.add_argument(
+        "--install-git-hooks",
+        action="store_true",
+        help="Install pre-commit and post-commit Git hooks for release-check and snapshot logging.",
+    )
     integrate_parser.set_defaults(func=cmd_integrate)
 
     audit_parser = subparsers.add_parser("audit", help="Audit Memory OS control-plane state.")
@@ -2022,6 +373,12 @@ def build_parser() -> argparse.ArgumentParser:
     quantize_parser.add_argument("--uncertainty", type=float, default=0.0)
     quantize_parser.add_argument("--format", choices={"json", "text"}, default="text")
     quantize_parser.set_defaults(func=cmd_quantize)
+
+    models_parser = subparsers.add_parser("models", help="Manage and recommend local models based on system hardware.")
+    models_subparsers = models_parser.add_subparsers(dest="models_action", required=True)
+    models_recommend_parser = models_subparsers.add_parser("recommend", help="Recommend local models that fit host hardware.")
+    models_recommend_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    models_recommend_parser.set_defaults(func=cmd_models)
 
     workflows_parser = subparsers.add_parser("workflows", help="Validate workflow TOML specs and build a manifest.")
     workflows_parser.add_argument("--format", choices={"json", "markdown"}, default="markdown")
@@ -2059,6 +416,10 @@ def build_parser() -> argparse.ArgumentParser:
     spec_analyze_parser.add_argument("feature", nargs="?", help="Feature id or unique prefix. Defaults to latest.")
     spec_analyze_parser.add_argument("--format", choices={"json", "markdown"}, default="markdown")
     spec_analyze_parser.set_defaults(func=cmd_spec)
+
+    spec_sync_parser = spec_subparsers.add_parser("sync", help="Scan local spec files and sync requirements to the memory graph.")
+    spec_sync_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    spec_sync_parser.set_defaults(func=cmd_spec)
 
     contract_parser = subparsers.add_parser(
         "contract",
@@ -2183,6 +544,131 @@ def build_parser() -> argparse.ArgumentParser:
     idea_expand_parser.add_argument("--dry-run", action="store_true", help="Accepted for forward-compat; rendering is always dry (no LLM call exists yet).")
     idea_expand_parser.add_argument("--format", choices={"json", "markdown"}, default="markdown")
     idea_expand_parser.set_defaults(func=cmd_idea)
+
+    lora_parser = subparsers.add_parser(
+        "lora",
+        help="Build datasets and render training scripts for local LoRA skill adapters. "
+             "Offline only — actual training runs on separate GPU hardware, not here.",
+    )
+    lora_subparsers = lora_parser.add_subparsers(dest="lora_action", required=True)
+
+    lora_dataset_parser = lora_subparsers.add_parser("dataset", help="Dataset operations.")
+    lora_dataset_subparsers = lora_dataset_parser.add_subparsers(dest="lora_dataset_action", required=True)
+    lora_dataset_build_parser = lora_dataset_subparsers.add_parser(
+        "build", help="Build a TRL-ready JSONL dataset from task capsules and/or local documents."
+    )
+    lora_dataset_build_parser.add_argument("--adapter", required=True, help="Adapter name, e.g. 'memory', 'docs', 'terminal'.")
+    lora_dataset_build_parser.add_argument(
+        "--source", choices={"capsules", "sqlite", "docs", "action_router", "telegram", "responder"}, action="append", default=None,
+        help="Repeatable. 'capsules' = agent_context/task_capsules.jsonl, "
+             "'sqlite' = verified nodes already in memory_os.db (no new datastore), "
+             "'docs' = local files via --doc-root/--doc-glob, "
+             "'telegram' = real Telegram action-router conversations. Default: capsules.",
+    )
+    lora_dataset_build_parser.add_argument("--doc-root", default=None, help="Root directory to glob for --source docs/both (default: project root).")
+    lora_dataset_build_parser.add_argument("--doc-glob", action="append", default=None, help="Glob pattern relative to --doc-root (repeatable). Default: '**/*.md'.")
+    lora_dataset_build_parser.add_argument("--instruction", default="Summarize this document and extract any rules/facts worth remembering.")
+    lora_dataset_build_parser.add_argument("--system-prompt", default="You are a local Memory OS assistant.")
+    lora_dataset_build_parser.add_argument("--out", required=True, help="Output JSONL path, relative to project root.")
+    lora_dataset_build_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    lora_dataset_build_parser.set_defaults(func=cmd_lora_dataset_build)
+
+    lora_script_parser = lora_subparsers.add_parser("script", help="Training script operations.")
+    lora_script_subparsers = lora_script_parser.add_subparsers(dest="lora_script_action", required=True)
+    lora_script_render_parser = lora_script_subparsers.add_parser(
+        "render", help="Render an Unsloth+TRL+PEFT training script for one adapter and register it."
+    )
+    lora_script_render_parser.add_argument("--adapter", required=True)
+    lora_script_render_parser.add_argument("--base-model", required=True, help="e.g. 'Qwen/Qwen3-8B'.")
+    lora_script_render_parser.add_argument("--dataset", required=True, help="Path to the JSONL built by 'lora dataset build'.")
+    lora_script_render_parser.add_argument("--output-dir", required=True, help="Where the training run (and final adapter) should be written, on the GPU machine.")
+    lora_script_render_parser.add_argument("--script-out", required=True, help="Where to write the rendered .py script, relative to project root.")
+    lora_script_render_parser.add_argument("--rank", type=int, default=16)
+    lora_script_render_parser.add_argument("--alpha", type=int, default=32)
+    lora_script_render_parser.add_argument("--epochs", type=int, default=3)
+    lora_script_render_parser.add_argument(
+        "--method", choices={"sft", "dpo", "grpo"}, default="sft",
+        help="'sft' (default) teaches output format/syntax. 'dpo' ranks chosen-vs-rejected "
+             "responses -- run as a second stage after an 'sft' adapter already trained. "
+             "'grpo' optimizes against a reward function the rendered script stubs as a TODO.",
+    )
+    lora_script_render_parser.add_argument("--description", default="")
+    lora_script_render_parser.add_argument(
+        "--role", choices={"action", "responder"}, default="action",
+        help="'action' feeds an agent_brain ActionBrain (terse JSON-only); 'responder' feeds a Responder (natural language).",
+    )
+    lora_script_render_parser.add_argument(
+        "--capability", action="append", default=None,
+        help="Repeatable. Declarative task tag this adapter covers, e.g. 'sql', 'uk_slang'. Not enforced anywhere yet.",
+    )
+    lora_script_render_parser.add_argument(
+        "--compatible-with", action="append", default=None,
+        help="Repeatable. Names of other adapters this one is known to combine safely with. Declarative only.",
+    )
+    lora_script_render_parser.add_argument(
+        "--incompatible-with", action="append", default=None,
+        help="Repeatable. Names of other adapters known to conflict with this one. Declarative only.",
+    )
+    lora_script_render_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    lora_script_render_parser.set_defaults(func=cmd_lora_script_render)
+
+    lora_list_parser = lora_subparsers.add_parser("list", help="List registered LoRA adapters (current/promoted version per adapter).")
+    lora_list_parser.add_argument("--capability", default=None, help="Filter to adapters declaring this capability tag.")
+    lora_list_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    lora_list_parser.set_defaults(func=cmd_lora_list)
+
+    lora_registry_parser = lora_subparsers.add_parser("registry", help="Inspect and promote/reject specific adapter versions.")
+    lora_registry_subparsers = lora_registry_parser.add_subparsers(dest="lora_registry_action", required=True)
+
+    lora_registry_versions_parser = lora_registry_subparsers.add_parser("versions", help="List every registered version of one adapter.")
+    lora_registry_versions_parser.add_argument("--adapter", required=True)
+    lora_registry_versions_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    lora_registry_versions_parser.set_defaults(func=cmd_lora_registry)
+
+    lora_registry_promote_parser = lora_registry_subparsers.add_parser(
+        "promote", help="Make a candidate version the current one for an adapter — do this only after eval confirms it's better."
+    )
+    lora_registry_promote_parser.add_argument("--adapter", required=True)
+    lora_registry_promote_parser.add_argument("--version", required=True, help="e.g. v002 (from 'lora script render' or 'lora registry versions').")
+    lora_registry_promote_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    lora_registry_promote_parser.set_defaults(func=cmd_lora_registry)
+
+    lora_registry_reject_parser = lora_registry_subparsers.add_parser("reject", help="Mark a candidate version as rejected — eval said it's worse.")
+    lora_registry_reject_parser.add_argument("--adapter", required=True)
+    lora_registry_reject_parser.add_argument("--version", required=True)
+    lora_registry_reject_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    lora_registry_reject_parser.set_defaults(func=cmd_lora_registry)
+
+    lora_registry_metrics_parser = lora_registry_subparsers.add_parser(
+        "metrics", help="Attach post-eval metrics (accuracy, json_validity, latency_ms, ...) to a specific version."
+    )
+    lora_registry_metrics_parser.add_argument("--adapter", required=True)
+    lora_registry_metrics_parser.add_argument("--version", required=True)
+    lora_registry_metrics_parser.add_argument("--set", action="append", help="key=value, repeatable.")
+    lora_registry_metrics_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    lora_registry_metrics_parser.set_defaults(func=cmd_lora_registry)
+
+    lora_registry_compatible_parser = lora_registry_subparsers.add_parser(
+        "compatible", help="Declarative check: do two adapters' declared compatible_with/incompatible_with lists allow combining them?"
+    )
+    lora_registry_compatible_parser.add_argument("--adapter-a", required=True, dest="adapter_a")
+    lora_registry_compatible_parser.add_argument("--adapter-b", required=True, dest="adapter_b")
+    lora_registry_compatible_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    lora_registry_compatible_parser.set_defaults(func=cmd_lora_registry)
+
+    agent_parser = subparsers.add_parser(
+        "agent",
+        help="Run the agent_brain Orchestrator (ActionBrain -> validated dispatch -> real executor). See docs/encyclopedia/agent_brain.md.",
+    )
+    agent_subparsers = agent_parser.add_subparsers(dest="agent_action", required=True)
+    agent_run_parser = agent_subparsers.add_parser(
+        "run", help="Propose one action for a task via LocalLLMActionBrain and execute it against this project's real memory graph."
+    )
+    agent_run_parser.add_argument("--task", required=True, help="Free-text task description.")
+    agent_run_parser.add_argument("--provider", default=None, help="Optional provider override (ollama, gemini, groq, openrouter, openai).")
+    agent_run_parser.add_argument("--model", default=None, help="Optional model override — point this at a trained action-LoRA's Ollama tag once one exists.")
+    agent_run_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    agent_run_parser.set_defaults(func=cmd_agent_run)
 
     route_parser = subparsers.add_parser("route", help="Route a task to a provider/model via LLMRouter (no network call).")
     route_parser.add_argument("--task", required=True, help="Free-text task description.")
@@ -2316,7 +802,7 @@ def build_parser() -> argparse.ArgumentParser:
         "compact",
         help="Parse task capsules to extract new memory nodes and edges via LLM.",
     )
-    compact_parser.add_argument("--provider", help="Optional provider override (gemini, openrouter, openai)")
+    compact_parser.add_argument("--provider", help="Optional provider override (ollama, gemini, groq, openrouter, openai). Default: local Ollama first, then free cloud tiers.")
     compact_parser.add_argument("--model", help="Optional model override")
     compact_parser.set_defaults(func=cmd_compact)
 
@@ -2332,11 +818,46 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export_skills_parser.set_defaults(func=cmd_export_skills)
 
+    skills_parser = subparsers.add_parser(
+        "skills",
+        help="Manage repo-local Memory OS skill packs.",
+    )
+    skills_subparsers = skills_parser.add_subparsers(dest="skills_action", required=True)
+
+    skills_list_parser = skills_subparsers.add_parser("list", help="List local skills.")
+    skills_list_parser.add_argument("--skills-dir", default="skills")
+    skills_list_parser.add_argument("--format", choices={"text", "json"}, default="text")
+    skills_list_parser.set_defaults(func=cmd_skills)
+
+    skills_validate_parser = skills_subparsers.add_parser("validate", help="Validate local skills.")
+    skills_validate_parser.add_argument("--skills-dir", default="skills")
+    skills_validate_parser.add_argument("--format", choices={"text", "json"}, default="text")
+    skills_validate_parser.set_defaults(func=cmd_skills)
+
+    skills_sync_parser = skills_subparsers.add_parser("sync", help="Sync local skills into agent-native directories.")
+    skills_sync_parser.add_argument("--skills-dir", default="skills")
+    skills_sync_parser.add_argument("--agent", action="append", choices=list(KNOWN_AGENTS) + ["claude-code", "antigravity"])
+    skills_sync_parser.add_argument("--dry-run", action="store_true")
+    skills_sync_parser.add_argument("--format", choices={"text", "json"}, default="text")
+    skills_sync_parser.set_defaults(func=cmd_skills)
+
+    skills_lock_parser = skills_subparsers.add_parser("lock", help="Generate/update deterministic skills.lock.json manifest.")
+    skills_lock_parser.add_argument("--skills-dir", default="skills")
+    skills_lock_parser.add_argument("--format", choices={"text", "json"}, default="text")
+    skills_lock_parser.set_defaults(func=cmd_skills)
+
+    skills_refresh_parser = skills_subparsers.add_parser("refresh", help="Refresh remote-sourced skill packs.")
+    skills_refresh_parser.add_argument("name", nargs="?", help="Skill name to refresh. If omitted, requires --all.")
+    skills_refresh_parser.add_argument("--all", action="store_true", help="Refresh all remote-sourced skills.")
+    skills_refresh_parser.add_argument("--skills-dir", default="skills")
+    skills_refresh_parser.add_argument("--format", choices={"text", "json"}, default="text")
+    skills_refresh_parser.set_defaults(func=cmd_skills)
+
     compress_parser = subparsers.add_parser(
         "compress",
         help="Use LLM to semantically merge verified memory nodes.",
     )
-    compress_parser.add_argument("--provider", help="Optional provider override (gemini, openrouter, openai)")
+    compress_parser.add_argument("--provider", help="Optional provider override (ollama, gemini, groq, openrouter, openai). Default: local Ollama first, then free cloud tiers.")
     compress_parser.add_argument("--model", help="Optional model override")
     compress_parser.add_argument("--dry-run", action="store_true", help="Show what would be merged without writing.")
     compress_parser.set_defaults(func=cmd_compress)
@@ -2372,7 +893,7 @@ def build_parser() -> argparse.ArgumentParser:
     link_infer_parser.add_argument(
         "--provider",
         default=None,
-        help="LLM provider override (gemini, openrouter, openai).",
+        help="LLM provider override (ollama, gemini, groq, openrouter, openai). Default: local Ollama first, then free cloud tiers.",
     )
     link_infer_parser.add_argument(
         "--model",
@@ -2426,12 +947,123 @@ def build_parser() -> argparse.ArgumentParser:
     )
     transition_parser.add_argument("--prune", action="store_true", help="Also archive stale/superseded nodes after transition.")
     transition_parser.add_argument("--validator", default="cli_transition", help="Validator name recorded in events.jsonl.")
+    transition_parser.add_argument("--min-confidence", type=float, default=None, help="Minimum confidence required to promote draft/observed nodes. Defaults to config confidence_threshold (0.7).")
     transition_parser.set_defaults(func=cmd_transition)
 
-    graph_map_parser = subparsers.add_parser("graph-map", help=argparse.SUPPRESS)
+    graph_map_parser = subparsers.add_parser("graph-map", help="Generate codebase graph map or visual HTML graph visualization.")
     graph_map_parser.add_argument("--emit-nodes", action="store_true")
     graph_map_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    graph_map_parser.add_argument("--visual", action="store_true", help="Generate interactive HTML visualization of the memory graph.")
+    graph_map_parser.add_argument("--html", type=str, default=None, help="Output path for the generated HTML visualization.")
     graph_map_parser.set_defaults(func=cmd_graph_map)
+
+    codebase_parser = subparsers.add_parser("codebase", help="Index source code into the memory graph.")
+    codebase_subparsers = codebase_parser.add_subparsers(dest="codebase_action", required=True)
+    codebase_index_parser = codebase_subparsers.add_parser(
+        "index",
+        help="Index src/**/*.py through deterministic domain adapters.",
+    )
+    codebase_index_parser.add_argument("--source", default="src", help="Source directory relative to project root.")
+    codebase_index_parser.add_argument("--protocol-level", type=int, default=4)
+    codebase_index_parser.add_argument("--dry-run", action="store_true")
+    codebase_index_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    codebase_index_parser.set_defaults(func=cmd_codebase)
+
+    linux_parser = subparsers.add_parser("linux", help="Collect, sync, and query Linux/Ubuntu host inventory.")
+    linux_subparsers = linux_parser.add_subparsers(dest="linux_action")
+    linux_parser.set_defaults(func=cmd_linux)
+
+    linux_inventory_parser = linux_subparsers.add_parser("inventory", help="Collect read-only Linux inventory.")
+    linux_inventory_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    linux_inventory_parser.add_argument("--write", action="store_true", help="Write agent_context/linux_inventory/latest.json")
+    linux_inventory_parser.set_defaults(func=cmd_linux)
+
+    linux_sync_parser = linux_subparsers.add_parser("sync", help="Collect inventory and sync it into the Memory OS graph.")
+    linux_sync_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    linux_sync_parser.set_defaults(func=cmd_linux)
+
+    linux_query_parser = linux_subparsers.add_parser("query", help="Query synced Linux inventory facts.")
+    linux_query_parser.add_argument("query")
+    linux_query_parser.add_argument("--limit", type=int, default=25)
+    linux_query_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    linux_query_parser.set_defaults(func=cmd_linux)
+
+    linux_doctor_parser = linux_subparsers.add_parser("doctor", help="Report Linux inventory issues and human-approved sudo guidance.")
+    linux_doctor_parser.set_defaults(func=cmd_linux)
+
+    linux_provision_parser = linux_subparsers.add_parser("provision", help="Idempotently provision UI environments, apps, or tools.")
+    linux_provision_parser.add_argument("type", choices={"ui", "tool", "app"})
+    linux_provision_parser.add_argument("target", help="Target component (e.g. kde, gnome, firefox, zellij)")
+    linux_provision_parser.set_defaults(func=cmd_linux)
+
+    xfce_parser = subparsers.add_parser("xfce", help="Inspect and manage XFCE settings through xfconf-query.")
+    xfce_subparsers = xfce_parser.add_subparsers(dest="xfce_action")
+    xfce_parser.set_defaults(func=cmd_xfce)
+
+    xfce_status = xfce_subparsers.add_parser("status", help="Show XFCE settings bus availability and channels.")
+    xfce_status.add_argument("--json", action="store_true")
+    xfce_status.set_defaults(func=cmd_xfce)
+
+    xfce_channels = xfce_subparsers.add_parser("channels", help="List XFCE xfconf channels.")
+    xfce_channels.add_argument("--json", action="store_true")
+    xfce_channels.set_defaults(func=cmd_xfce)
+
+    xfce_list = xfce_subparsers.add_parser("list", help="List properties in an XFCE channel.")
+    xfce_list.add_argument("channel")
+    xfce_list.add_argument("--json", action="store_true")
+    xfce_list.set_defaults(func=cmd_xfce)
+
+    xfce_get = xfce_subparsers.add_parser("get", help="Read an XFCE property.")
+    xfce_get.add_argument("channel")
+    xfce_get.add_argument("property")
+    xfce_get.set_defaults(func=cmd_xfce)
+
+    xfce_set = xfce_subparsers.add_parser("set", help="Set an XFCE property.")
+    xfce_set.add_argument("channel")
+    xfce_set.add_argument("property")
+    xfce_set.add_argument("value")
+    xfce_set.add_argument("--type", choices=sorted({"string", "int", "uint", "bool", "double"}), required=True)
+    xfce_set.add_argument("--create", action="store_true", help="Create the property if it does not exist.")
+    xfce_set.set_defaults(func=cmd_xfce)
+
+    xfce_reset = xfce_subparsers.add_parser("reset", help="Reset an XFCE property.")
+    xfce_reset.add_argument("channel")
+    xfce_reset.add_argument("property")
+    xfce_reset.add_argument("--recursive", action="store_true")
+    xfce_reset.set_defaults(func=cmd_xfce)
+
+    xfce_snapshot = xfce_subparsers.add_parser("snapshot", help="Read all properties from selected XFCE channels.")
+    xfce_snapshot.add_argument("--channel", action="append", help="Limit snapshot to one channel; repeatable.")
+    xfce_snapshot.add_argument("--json", action="store_true")
+    xfce_snapshot.set_defaults(func=cmd_xfce)
+
+    xfce_summary = xfce_subparsers.add_parser("summary", help="Print compact XFCE state summary.")
+    xfce_summary.add_argument("--cached", action="store_true", help="Read summary from agent_context/xfce/latest.json.")
+    xfce_summary.add_argument("--json", action="store_true")
+    xfce_summary.set_defaults(func=cmd_xfce)
+
+    xfce_cache = xfce_subparsers.add_parser("cache", help="Read or write local XFCE state cache.")
+    xfce_cache.add_argument("--write", action="store_true", help="Capture full live XFCE state into agent_context/xfce/latest.json.")
+    xfce_cache.add_argument("--json", action="store_true")
+    xfce_cache.set_defaults(func=cmd_xfce)
+
+    xfce_sync = xfce_subparsers.add_parser("sync", help="Refresh local XFCE cache from live state.")
+    xfce_sync.add_argument("--json", action="store_true")
+    xfce_sync.set_defaults(func=cmd_xfce)
+
+    xfce_diff = xfce_subparsers.add_parser("diff", help="Compare live XFCE summary against cached summary.")
+    xfce_diff.add_argument("--json", action="store_true")
+    xfce_diff.set_defaults(func=cmd_xfce)
+
+    xfce_profiles = xfce_subparsers.add_parser("profiles", help="List curated XFCE profiles.")
+    xfce_profiles.add_argument("--json", action="store_true")
+    xfce_profiles.set_defaults(func=cmd_xfce)
+
+    xfce_apply = xfce_subparsers.add_parser("apply", help="Apply a curated XFCE profile.")
+    xfce_apply.add_argument("profile", choices=["memory-workstation", "memory-workstation-4k"])
+    xfce_apply.add_argument("--dry-run", action="store_true", help="Print planned changes without applying them.")
+    xfce_apply.add_argument("--json", action="store_true")
+    xfce_apply.set_defaults(func=cmd_xfce)
 
     analyze_os_parser = subparsers.add_parser("analyze-os", help=argparse.SUPPRESS)
     analyze_os_parser.add_argument("-v", "--verbose", action="store_true")
@@ -2448,14 +1080,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     search_parser = subparsers.add_parser(
         "search",
-        help="Query Memory OS nodes, codebase symbols, and traverse relations."
+        help="Query memory runtime nodes, codebase symbols, and traverse relations."
     )
     search_parser.add_argument("query", help="Keyword query or exact symbol.")
-    search_parser.add_argument("--depth", type=int, default=1, help="Graph traversal recursion depth.")
+    search_parser.add_argument("--depth", type=int, default=1, help="Retrieval traversal recursion depth.")
     search_parser.add_argument("--json", action="store_true", help="Output raw JSON instead of human-readable text.")
+    search_parser.add_argument("--semantic", action="store_true", help="Force semantic vector search instead of lexical/keyword search.")
     search_parser.set_defaults(func=cmd_search)
 
     stats_parser = subparsers.add_parser("stats", help=argparse.SUPPRESS)
+    stats_parser.add_argument("--json", action="store_true", help="Output raw JSON instead of human-readable YAML.")
     stats_parser.set_defaults(func=cmd_stats)
 
     rag_parser = subparsers.add_parser("rag", help=argparse.SUPPRESS)
@@ -2519,6 +1153,8 @@ def build_parser() -> argparse.ArgumentParser:
     query_parser.add_argument("--status", help="Filter by status (draft, observed, verified, stale, superseded)")
     query_parser.add_argument("--tag", help="Filter by tag (exact match, case-insensitive)")
     query_parser.add_argument("--since", help="Filter nodes with freshness >= ISO date (e.g. 2026-06-01)")
+    query_parser.add_argument("--limit", type=int, default=None, help="Maximum nodes to return (default: all).")
+    query_parser.add_argument("--offset", type=int, default=0, help="Skip the first N matching nodes.")
     query_parser.add_argument("--json", action="store_true", help="Output raw JSON.")
     query_parser.set_defaults(func=cmd_query)
 
@@ -2529,6 +1165,99 @@ def build_parser() -> argparse.ArgumentParser:
     backlinks_parser.add_argument("node_id", help="Target node ID to look up.")
     backlinks_parser.add_argument("--json", action="store_true", help="Output raw JSON.")
     backlinks_parser.set_defaults(func=cmd_backlinks)
+
+    memory_history_parser = subparsers.add_parser(
+        "memory",
+        help="Memory history and maintenance — log/show/revert/health/curate/merge for the memory runtime.",
+    )
+    memory_history_subparsers = memory_history_parser.add_subparsers(dest="memory_action", required=True)
+
+    memory_write_parser = memory_history_subparsers.add_parser("write", help="Record a memory node (agent decision/fact) as a draft candidate through the lifecycle gate.")
+    memory_write_parser.add_argument("--type", dest="node_type", default="fact", choices=["fact", "rule", "config", "policy"], help="Node type (default fact).")
+    memory_write_parser.add_argument("--summary", required=True, help="The fact/decision text.")
+    memory_write_parser.add_argument("--id", dest="node_id", default=None, help="Node id; auto-generated from summary when omitted.")
+    memory_write_parser.add_argument("--evidence", default="", help="Comma-separated evidence files/URLs.")
+    memory_write_parser.add_argument("--tags", default=None, help="Comma-separated tags.")
+    memory_write_parser.add_argument("--confidence", type=float, default=0.8, help="Candidate confidence 0..1 (default 0.8).")
+    memory_write_parser.add_argument("--validator", default=None, help="Recorded validator id (defaults to MEMORY_OS_AGENT_ID).")
+    memory_write_parser.set_defaults(func=cmd_memory_write)
+
+    memory_log_parser = memory_history_subparsers.add_parser("log", help="Chronological event history, optionally scoped to one node.")
+    memory_log_parser.add_argument("--node", default=None, help="Limit to events for this node ID.")
+    memory_log_parser.add_argument("--limit", type=int, default=None, help="Show only the most recent N events.")
+    memory_log_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    memory_log_parser.set_defaults(func=cmd_memory_log)
+
+    memory_show_parser = memory_history_subparsers.add_parser("show", help="One node's current/archived state plus its full event history.")
+    memory_show_parser.add_argument("node_id", help="Node ID to look up.")
+    memory_show_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    memory_show_parser.set_defaults(func=cmd_memory_show)
+
+    memory_revert_parser = memory_history_subparsers.add_parser("revert", help="Restore an archived (pruned/superseded) node back as a draft. Does not restore its old edges.")
+    memory_revert_parser.add_argument("node_id", help="Node ID to restore from archived_nodes.jsonl.")
+    memory_revert_parser.add_argument("--dry-run", action="store_true")
+    memory_revert_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    memory_revert_parser.set_defaults(func=cmd_memory_revert)
+
+    memory_normalize_timecodes_parser = memory_history_subparsers.add_parser(
+        "normalize-timecodes",
+        help="Normalize node/event memory timecodes to offset-aware ISO-8601 in the configured user timezone.",
+    )
+    memory_normalize_timecodes_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    memory_normalize_timecodes_parser.set_defaults(func=cmd_memory_normalize_timecodes)
+
+    memory_health_parser = memory_history_subparsers.add_parser(
+        "health",
+        help="Graph health summary: live/archived nodes, edge density, orphan rate, comm noise, and eval readiness.",
+    )
+    memory_health_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    memory_health_parser.set_defaults(func=cmd_memory_health)
+
+    memory_curate_parser = memory_history_subparsers.add_parser(
+        "curate",
+        help="Actionable curation queue: merge candidates, connected components, and orphan nodes.",
+    )
+    memory_curate_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    memory_curate_parser.add_argument("--limit", type=int, default=10, help="Limit merge candidates and components in the report.")
+    memory_curate_parser.set_defaults(func=cmd_memory_curate)
+
+    memory_dedup_candidates_parser = memory_history_subparsers.add_parser(
+        "dedup-candidates",
+        help="Deterministic candidate nodes for deduplication based on embedding cosine similarity >= 0.9 or Jaccard similarity >= 0.8.",
+    )
+    memory_dedup_candidates_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    memory_dedup_candidates_parser.add_argument("--limit", type=int, default=None, help="Limit the number of candidates.")
+    memory_dedup_candidates_parser.set_defaults(func=cmd_memory_dedup_candidates)
+
+    memory_merge_preview_parser = memory_history_subparsers.add_parser(
+        "merge-preview",
+        help="Preview semantic merge groups with canonical node choice and replacement plan.",
+    )
+    memory_merge_preview_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    memory_merge_preview_parser.add_argument("--limit", type=int, default=10, help="Limit merge groups in the report.")
+    memory_merge_preview_parser.set_defaults(func=cmd_memory_merge_preview)
+
+    memory_merge_apply_parser = memory_history_subparsers.add_parser(
+        "merge-apply",
+        help="Apply semantic merge groups through patch-backed memory rewrites.",
+    )
+    memory_merge_apply_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    memory_merge_apply_parser.add_argument("--limit", type=int, default=10, help="Limit merge groups to apply.")
+    memory_merge_apply_parser.add_argument("--dry-run", action="store_true", help="Preview the patch-backed merge without writing.")
+    memory_merge_apply_parser.set_defaults(func=cmd_memory_merge_apply)
+
+    memory_browse_parser = memory_history_subparsers.add_parser(
+        "browse",
+        help="Focus a node or query and show its local memory neighborhood.",
+    )
+    memory_browse_parser.add_argument("query", nargs="?", default="", help="Node ID or search query.")
+    memory_browse_parser.add_argument("--node-id", dest="node_id", default=None, help="Explicit node ID to focus.")
+    memory_browse_parser.add_argument("--depth", type=int, default=1, help="Search depth when resolving the focus query.")
+    memory_browse_parser.add_argument("--limit", type=int, default=3, help="Max focus nodes to show.")
+    memory_browse_parser.add_argument("--neighbors", type=int, default=8, help="Max nearby nodes to show per focus node.")
+    memory_browse_parser.add_argument("--edges", type=int, default=12, help="Max inbound/outbound edges to show per focus node.")
+    memory_browse_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    memory_browse_parser.set_defaults(func=cmd_memory_browse)
 
     unlinked_parser = subparsers.add_parser("unlinked", help=argparse.SUPPRESS)
     unlinked_parser.add_argument("--json", action="store_true")
@@ -2565,6 +1294,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
     doctor_parser = subparsers.add_parser("doctor", help="Check system dependencies, files, DB, and environment.")
+    doctor_parser.add_argument("--format", choices={"json", "text"}, default="text")
     doctor_parser.set_defaults(func=cmd_doctor)
 
     resources_parser = subparsers.add_parser(
@@ -2579,11 +1309,17 @@ def build_parser() -> argparse.ArgumentParser:
     resources_snapshot_parser.add_argument("--format", choices={"json", "text"}, default="text")
     resources_snapshot_parser.set_defaults(func=cmd_resources)
 
-    resources_checkpoint_parser = resources_subparsers.add_parser("checkpoint", help="Run a SQLite WAL checkpoint.")
-    resources_checkpoint_parser.add_argument("--format", choices={"json", "text"}, default="text")
-    resources_checkpoint_parser.add_argument("--dry-run", action="store_true")
-    resources_checkpoint_parser.add_argument("--no-truncate", action="store_true", help="Use FULL checkpoint instead of TRUNCATE.")
-    resources_checkpoint_parser.set_defaults(func=cmd_resources)
+    storage_parser = subparsers.add_parser(
+        "storage",
+        help="Recommend a storage tier (sqlite / local_postgres / cloud_postgres) from measured local signals. Advisory only — never migrates anything.",
+    )
+    storage_subparsers = storage_parser.add_subparsers(dest="storage_action")
+    storage_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    storage_parser.set_defaults(func=cmd_storage)
+
+    storage_advise_parser = storage_subparsers.add_parser("advise", help="Report the recommended storage tier and why.")
+    storage_advise_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    storage_advise_parser.set_defaults(func=cmd_storage)
 
     resources_compact_parser = resources_subparsers.add_parser("compact", help="Run bounded local resource compaction actions.")
     resources_compact_parser.add_argument("--format", choices={"json", "text"}, default="text")
@@ -2613,6 +1349,14 @@ def build_parser() -> argparse.ArgumentParser:
     release_check_parser.add_argument("--format", choices={"json", "text"}, default="text")
     release_check_parser.set_defaults(func=cmd_release_check)
 
+    git_commit_safe_parser = subparsers.add_parser(
+        "git-commit-safe",
+        help="Stage exactly the given files and commit under a mutex, to avoid sweeping concurrent agents' WIP.",
+    )
+    git_commit_safe_parser.add_argument("files", nargs="+", help="Files to stage for this commit.")
+    git_commit_safe_parser.add_argument("-m", "--message", required=True, help="Commit message.")
+    git_commit_safe_parser.set_defaults(func=cmd_git_commit_safe)
+
     check_updates_parser = subparsers.add_parser(
         "check-updates",
         help="Check the upstream URL for memory_os and read agent contribution rules."
@@ -2626,9 +1370,405 @@ def build_parser() -> argparse.ArgumentParser:
     switch_space_parser.add_argument("target_space", help="Name of the space to switch to (e.g. default, user_persona)")
     switch_space_parser.set_defaults(func=cmd_switch_space)
 
+    undo_parser = subparsers.add_parser(
+        "undo",
+        help="Universal undo command to revert memory events, patch store changes, or git changes for a task.",
+    )
+    undo_parser.add_argument("--task-id", help="Target task ID to undo.")
+    undo_parser.add_argument("--dry-run", action="store_true", help="Perform a dry run without applying changes.")
+    undo_parser.add_argument("--json", action="store_true", help="Output result as JSON.")
+    undo_parser.set_defaults(func=cmd_undo)
+
+    # ------------------------------------------------------------------ #
+    # Agentic OS — Phase 3: Router Plan                                    #
+    # ------------------------------------------------------------------ #
+    plan_parser = subparsers.add_parser(
+        "plan",
+        help="Produce an execution plan for a task (Phase 3 — Router Plan).",
+    )
+    plan_parser.add_argument("--task-id", dest="task_id", default=None,
+                             help="Task ID from the task kernel.")
+    plan_parser.add_argument("--text", default="", help="Free-text task description (if no task-id).")
+    plan_parser.add_argument("--risk", choices=["low", "medium", "high"], default="low")
+    plan_parser.add_argument("--capabilities", default="",
+                             help="Comma-separated required capabilities (if no task-id).")
+    plan_parser.add_argument("--json", action="store_true")
+    plan_parser.set_defaults(func=cmd_plan)
+
+    # ------------------------------------------------------------------ #
+    # Agentic OS — Phase 4: Dispatch                                       #
+    # ------------------------------------------------------------------ #
+    dispatch_parser = subparsers.add_parser(
+        "dispatch",
+        help="Dispatch a task to an agent adapter and write evidence (Phase 4).",
+    )
+    dispatch_parser.add_argument("--task-id", dest="task_id", default=None)
+    dispatch_parser.add_argument("--adapter",
+                                 choices=["auto", "shell", "script", "local_model",
+                                          "claude", "codex", "agy"],
+                                 default="auto",
+                                 help="Force a specific adapter (default: auto from RouterPlan).")
+    dispatch_parser.add_argument("--cmd", default=None,
+                                 help="Command to run (for shell/script adapters).")
+    dispatch_parser.add_argument("--text", default="",
+                                 help="Prompt text (for local_model adapter).")
+    dispatch_parser.add_argument("--dry-run", dest="dry_run", action="store_true",
+                                 help="Show what would be dispatched without executing.")
+    dispatch_parser.add_argument("--timeout", type=float, default=300.0,
+                                 help="Timeout in seconds for CLI agent adapters (default 300).")
+    dispatch_parser.add_argument("--json", action="store_true")
+    dispatch_parser.set_defaults(func=cmd_dispatch)
+
+    # ------------------------------------------------------------------ #
+    # Agentic OS — Handoff Builder                                         #
+    # ------------------------------------------------------------------ #
+    handoff_parser = subparsers.add_parser(
+        "handoff",
+        help="Build a handoff context pack markdown for agent-to-agent transitions.",
+    )
+    handoff_subs = handoff_parser.add_subparsers(dest="handoff_action", required=True)
+
+    handoff_build = handoff_subs.add_parser("build", help="Generate handoff markdown for a task.")
+    handoff_build.add_argument("--task-id", dest="task_id", required=True)
+    handoff_build.add_argument("--output", default=None,
+                               help="Output path (default: agent_context/context_packs/handoff_<id>.md)")
+    handoff_build.add_argument("--print", dest="print_output", action="store_true",
+                               help="Also print the markdown to stdout.")
+    handoff_build.set_defaults(func=cmd_handoff)
+
+    # ------------------------------------------------------------------ #
+    # Agent Communication Toolkit                                         #
+    # ------------------------------------------------------------------ #
+    comm_parser = subparsers.add_parser(
+        "comm",
+        help="Send tmux-backed inter-agent messages and read compact inbox summaries.",
+    )
+    comm_subparsers = comm_parser.add_subparsers(dest="comm_action", required=True)
+
+    comm_send = comm_subparsers.add_parser("send", help="Send a message to an agent or orchestrator via tmux.")
+    comm_send.add_argument("recipient", help="Target agent id or tmux session alias (claude, codex, agy, ...).")
+    comm_send.add_argument("message", help="Message text to send.")
+    comm_send.add_argument("--kind", choices=["TASK_ASSIGN", "STATUS_REPORT"], required=True, help="Strict message kind for small-context agents.")
+    comm_send.add_argument("--sender", default=None, help="Sender id recorded in the event log.")
+    comm_send.add_argument("--task-id", dest="task_id", required=True, help="Task id for event correlation.")
+    comm_send.add_argument("--tmux-target", dest="tmux_target", default=None, help="Override the tmux target directly.")
+    comm_send.add_argument("--no-unlock", dest="no_unlock", action="store_true", help="Skip Escape/Enter unlock preamble.")
+    comm_send.add_argument("--json", action="store_true")
+    comm_send.set_defaults(func=cmd_comm)
+
+    comm_inbox = comm_subparsers.add_parser("inbox", help="Show active tasks and UNREAD messages; advances the read cursor.")
+    comm_inbox.add_argument("--recipient", default=None, help="Inbox owner; defaults to MEMORY_OS_AGENT_ID or claude.")
+    comm_inbox.add_argument("--task-id", dest="task_id", default=None, help="Limit to one task id (does not advance cursor).")
+    comm_inbox.add_argument("--limit", type=int, default=20, help="Max tasks/messages to show.")
+    comm_inbox.add_argument("--all", action="store_true", help="Show already-read messages too.")
+    comm_inbox.add_argument("--peek", action="store_true", help="Show unread without advancing the cursor.")
+    comm_inbox.add_argument("--rewind", action="store_true", help="Reset the read cursor to 0 before listing.")
+    comm_inbox.add_argument("--json", action="store_true")
+    comm_inbox.set_defaults(func=cmd_comm)
+
+    comm_read = comm_subparsers.add_parser("read", help="Print the full body of one inbox message by its [#id].")
+    comm_read.add_argument("msg_id", type=int, help="Message id shown as [#N] in inbox listing.")
+    comm_read.add_argument("--recipient", default=None, help="Inbox owner; defaults to MEMORY_OS_AGENT_ID or claude.")
+    comm_read.add_argument("--json", action="store_true")
+    comm_read.set_defaults(func=cmd_comm)
+
+    comm_rotate = comm_subparsers.add_parser("rotate", help="Archive old event/inbox log lines, keeping the hot tail; read cursors are rebased.")
+    comm_rotate.set_defaults(func=cmd_comm)
+
+    comm_status = comm_subparsers.add_parser("status", help="Show tmux connectivity and recent comm activity.")
+    comm_status.add_argument("--json", action="store_true")
+    comm_status.set_defaults(func=cmd_comm)
+
+    comm_resume = comm_subparsers.add_parser("resume", help="Show a compact resume report after context loss or chat reset.")
+    comm_resume.add_argument("--limit", type=int, default=5, help="Max completed STATUS_REPORT events to include.")
+    comm_resume.add_argument("--json", action="store_true")
+    comm_resume.set_defaults(func=cmd_comm)
+
+    comm_feed = comm_subparsers.add_parser("feed", help="Show live timeline of inter-agent communication events.")
+    comm_feed.add_argument("--limit", type=int, default=30, help="Max events to show.")
+    comm_feed.add_argument("--json", action="store_true")
+    comm_feed.add_argument("--new", action="store_true", help="Only events since the last --new call (global cursor).")
+    comm_feed.add_argument("--watch", action="store_true", help="Tail task_events.jsonl in real-time (Ctrl-C to stop).")
+    comm_feed.set_defaults(func=cmd_comm)
+
+    feed_parser = subparsers.add_parser("feed", help="Show live timeline of inter-agent communication events.")
+    feed_parser.add_argument("--limit", type=int, default=30, help="Max events to show.")
+    feed_parser.add_argument("--json", action="store_true")
+    feed_parser.add_argument("--new", action="store_true", help="Only events since the last --new call (global cursor).")
+    feed_parser.add_argument("--watch", action="store_true", help="Tail task_events.jsonl in real-time (Ctrl-C to stop).")
+    feed_parser.set_defaults(func=lambda args, config: cmd_comm(argparse.Namespace(comm_action="feed", root=args.root, limit=args.limit, json=args.json, new=args.new, watch=args.watch), config))
+
+    # ------------------------------------------------------------------ #
+    # Tmux Automation & Control                                          #
+    # ------------------------------------------------------------------ #
+    tmux_parser = subparsers.add_parser(
+        "tmux",
+        help="Automated tmux control, prompt dispatch, shortcuts, and pane capturing for agents.",
+    )
+    tmux_subparsers = tmux_parser.add_subparsers(dest="tmux_action", required=True)
+
+    tmux_send = tmux_subparsers.add_parser("send", help="Send keys and message text to a target tmux pane.")
+    tmux_send.add_argument("target", help="Tmux target pane (e.g. memory_os_workspace:0.1 or 0).")
+    tmux_send.add_argument("message", help="Message text to send.")
+    tmux_send.add_argument("--no-submit", action="store_true", help="Do not send Enter/C-m submission keys after text.")
+    tmux_send.add_argument("--no-unlock", action="store_true", help="Skip Escape/Enter unlock preamble.")
+    tmux_send.set_defaults(func=cmd_tmux)
+
+    tmux_shortcut = tmux_subparsers.add_parser("shortcut", help="Send a control shortcut to a target tmux pane.")
+    tmux_shortcut.add_argument("target", help="Tmux target pane.")
+    tmux_shortcut.add_argument("name", choices=["cancel", "clear", "exit", "detach", "toggle_auto", "page_up", "page_down", "next_window", "previous_window", "unlock"], help="Shortcut name.")
+    tmux_shortcut.set_defaults(func=cmd_tmux)
+
+    tmux_press = tmux_subparsers.add_parser("press", help="Send special keys or sequence (e.g. up, down, enter, escape, tab) to a pane.")
+    tmux_press.add_argument("target", help="Target pane.")
+    tmux_press.add_argument("keys", nargs="+", help="One or more keys to send (e.g. up down enter space a b c).")
+    tmux_press.set_defaults(func=cmd_tmux)
+
+
+    tmux_capture = tmux_subparsers.add_parser("capture", help="Capture tail output from a tmux pane.")
+    tmux_capture.add_argument("target", help="Tmux target pane.")
+    tmux_capture.add_argument("--lines", type=int, default=50, help="Number of lines to capture.")
+    tmux_capture.set_defaults(func=cmd_tmux)
+
+    tmux_list = tmux_subparsers.add_parser("list", help="List active tmux panes and commands.")
+    tmux_list.add_argument("--session", default=None, help="Filter by session name.")
+    tmux_list.add_argument("--json", action="store_true")
+    tmux_list.set_defaults(func=cmd_tmux)
+
+
+    # ------------------------------------------------------------------ #
+    # Telegram Polling Daemon                                             #
+    # ------------------------------------------------------------------ #
+    tg_daemon_parser = subparsers.add_parser(
+        "telegram-daemon",
+        help="Start the Telegram long-polling loop (get_updates → ActionBrain → Responder → send_message).",
+    )
+    tg_daemon_parser.add_argument("--poll-interval", dest="poll_interval", type=float, default=2.0,
+                                  help="Seconds between get_updates calls (default 2.0).")
+    tg_daemon_parser.add_argument("--provider", default=None, help="Override LLM provider (llama_cpp, ollama, …).")
+    tg_daemon_parser.add_argument("--model", default=None, help="Override LLM model name.")
+    tg_daemon_parser.add_argument("--system-prompt", dest="system_prompt", default=None,
+                                  help="Override responder system prompt.")
+    tg_daemon_parser.add_argument("--once", action="store_true",
+                                  help="Process one update batch and exit (useful for testing).")
+    tg_daemon_parser.add_argument("--no-task-tracking", dest="no_task_tracking",
+                                  action="store_true",
+                                  help="Disable Task Kernel integration (don't create tasks per message).")
+    tg_daemon_parser.add_argument("--swarm-control", dest="swarm_control",
+                                  action="store_true",
+                                  help="Enable deterministic Telegram swarm-control commands (/task, /swarm, /status, /search).")
+    tg_daemon_parser.add_argument("--swarm-watch-timeout", dest="swarm_watch_timeout", type=float, default=10.0,
+                                  help="Seconds to wait for STATUS_REPORT after dispatch before returning to polling.")
+    tg_daemon_parser.add_argument("--max-retries", dest="max_retries", type=int, default=5,
+                                  help="Max consecutive get_updates failures before stopping (default 5).")
+    tg_daemon_parser.set_defaults(func=cmd_telegram_daemon)
+
+    tg_control_parser = subparsers.add_parser(
+        "telegram-daemon-control",
+        help="Manage the Telegram swarm-control daemon as a detached local process.",
+    )
+    tg_control_parser.add_argument("telegram_daemon_action", choices=["start", "stop", "restart", "status"])
+    tg_control_parser.add_argument("--poll-interval", dest="poll_interval", type=float, default=2.0)
+    tg_control_parser.add_argument("--swarm-watch-timeout", dest="swarm_watch_timeout", type=float, default=0)
+    tg_control_parser.add_argument("--no-task-tracking", dest="no_task_tracking", action="store_true")
+    tg_control_parser.add_argument("--force", action="store_true", help="For stop/restart: use SIGKILL if SIGTERM does not exit.")
+    tg_control_parser.set_defaults(func=cmd_telegram_daemon_control)
+
+    # ------------------------------------------------------------------ #
+    # Agentic OS — Task Kernel (Phase 1)                                   #
+    # ------------------------------------------------------------------ #
+    task_parser = subparsers.add_parser("task", help="File-backed task kernel (create, list, claim, status…)")
+    task_subs = task_parser.add_subparsers(dest="task_action", required=True)
+
+    task_create = task_subs.add_parser("create", help="Create a new task.")
+    task_create.add_argument("--title", required=True, help="Short task title.")
+    task_create.add_argument("--goal", default="", help="Detailed goal description.")
+    task_create.add_argument("--risk", choices=["low", "medium", "high"], default="low")
+    task_create.add_argument("--capabilities", default="", help="Comma-separated required capabilities.")
+    task_create.add_argument("--done-criteria", dest="done_criteria", default=None)
+    task_create.add_argument("--json", action="store_true")
+    task_create.set_defaults(func=cmd_task)
+
+    task_list = task_subs.add_parser("list", help="List tasks, optionally filtered.")
+    task_list.add_argument("--status", choices=["pending", "claimed", "running", "blocked", "review", "done"], default=None)
+    task_list.add_argument("--agent", default=None, help="Filter by assigned agent id.")
+    task_list.add_argument("--risk", choices=["low", "medium", "high"], default=None)
+    task_list.add_argument("--json", action="store_true")
+    task_list.set_defaults(func=cmd_task)
+
+    task_status = task_subs.add_parser("status", help="Show full status of a task including event history.")
+    task_status.add_argument("task_id")
+    task_status.add_argument("--json", action="store_true")
+    task_status.set_defaults(func=cmd_task)
+
+    task_claim = task_subs.add_parser("claim", help="Claim a pending task for an agent.")
+    task_claim.add_argument("task_id")
+    task_claim.add_argument("--agent", required=True, help="Agent id claiming the task.")
+    task_claim.add_argument("--lease-minutes", dest="lease_minutes", type=int, default=30)
+    task_claim.set_defaults(func=cmd_task)
+
+    task_start = task_subs.add_parser("start", help="Transition claimed → running.")
+    task_start.add_argument("task_id")
+    task_start.set_defaults(func=cmd_task)
+
+    task_block = task_subs.add_parser("block", help="Block a running/claimed task.")
+    task_block.add_argument("task_id")
+    task_block.add_argument("--reason", required=True)
+    task_block.set_defaults(func=cmd_task)
+
+    task_review = task_subs.add_parser("review", help="Move running task to review.")
+    task_review.add_argument("task_id")
+    task_review.add_argument("--summary", default=None)
+    task_review.set_defaults(func=cmd_task)
+
+    task_done = task_subs.add_parser("done", help="Mark a task as done.")
+    task_done.add_argument("task_id")
+    task_done.add_argument("--summary", default=None)
+    task_done.set_defaults(func=cmd_task)
+
+    task_unclaim = task_subs.add_parser("unclaim", help="Release a claim; task returns to pending.")
+    task_unclaim.add_argument("task_id")
+    task_unclaim.set_defaults(func=cmd_task)
+
+    task_leases = task_subs.add_parser("leases", help="Show active and stale leases.")
+    task_leases.add_argument("--json", action="store_true")
+    task_leases.set_defaults(func=cmd_task)
+
+    task_events = task_subs.add_parser("events", help="Show task event log.")
+    task_events.add_argument("task_id", nargs="?", default=None, help="Filter to this task id (all if omitted).")
+    task_events.add_argument("--limit", type=int, default=None)
+    task_events.add_argument("--json", action="store_true")
+    task_events.set_defaults(func=cmd_task)
+
+    # ------------------------------------------------------------------ #
+    # Agentic OS — Agent Registry (Phase 2)                               #
+    # ------------------------------------------------------------------ #
+    agent_reg_parser = subparsers.add_parser("agent-registry", help="Agent registry — list and audit configured agents.")
+    agent_reg_subs = agent_reg_parser.add_subparsers(dest="registry_action", required=True)
+
+    agent_reg_list = agent_reg_subs.add_parser("list", help="List all registered agents.")
+    agent_reg_list.set_defaults(func=cmd_agent_registry)
+
+    agent_reg_audit = agent_reg_subs.add_parser("audit", help="Audit agent CLIs — check which binaries are available.")
+    agent_reg_audit.set_defaults(func=cmd_agent_registry)
+
+    agent_reg_health = agent_reg_subs.add_parser("health", help="Check agent responsiveness, binaries, and quotas (AgentHealthProbe).")
+    agent_reg_health.add_argument("--force", action="store_true", help="Bypass cache and run real probe checks.")
+    agent_reg_health.add_argument("--json", action="store_true", help="Output results as JSON.")
+    agent_reg_health.set_defaults(func=cmd_agent_registry)
+
+    agent_mgr_parser = subparsers.add_parser("agent-manager", help="Launch interactive TUI agent quota and pane manager.")
+    agent_mgr_parser.add_argument("--status", action="store_true", help="Print agent status table and exit.")
+    agent_mgr_parser.add_argument("--json", action="store_true", help="Print agent status as JSON and exit.")
+    agent_mgr_parser.add_argument("--plain", action="store_true", help="Run plain text interactive mode.")
+    agent_mgr_parser.add_argument("--probe-usage", dest="probe_usage", action="store_true", help="Inject /usage into idle agent panes, harvest percentages, print status.")
+    agent_mgr_parser.add_argument("--restart-all", dest="restart_all", action="store_true", help="Restart Memory OS daemon, Telegram daemon, and workspace runtime.")
+    agent_mgr_parser.add_argument("--shutdown-all", dest="shutdown_all", action="store_true", help="Stop Memory OS daemon, Telegram daemon, and workspace runtime.")
+    agent_mgr_parser.add_argument("--force", action="store_true", help="Use forceful stop where the underlying process supports it.")
+    agent_mgr_parser.add_argument("--no-detach", dest="no_detach", action="store_true", help=argparse.SUPPRESS)
+    agent_mgr_parser.add_argument("--workspace-only", dest="workspace_only", action="store_true", help=argparse.SUPPRESS)
+    agent_mgr_parser.set_defaults(func=cmd_agent_manager)
+
+    ls_parser = subparsers.add_parser("ls", help="List running memory_os instances (workspace + daemon).")
+    ls_parser.add_argument("--json", action="store_true", help="Output as JSON.")
+    ls_parser.set_defaults(func=cmd_ls)
+
+    zellij_parser = subparsers.add_parser("zellij", help="Launch the Memory OS workspace in Zellij.")
+    zellij_parser.set_defaults(func=cmd_zellij)
+
+    killall_parser = subparsers.add_parser("killall", help="Stop and close all Memory OS processes, daemons, tmux and Zellij sessions/panes.")
+    killall_parser.set_defaults(func=cmd_killall)
+
+    swarm_send_parser = subparsers.add_parser(
+        "swarm-send", help="Send a task to an agent pane with swarm completion protocol."
+    )
+    swarm_send_parser.add_argument("--agent", required=True, choices=list(KNOWN_AGENTS) + ["local"], help="Target agent.")
+    swarm_send_parser.add_argument("--task-id", required=True, dest="task_id", help="Task ID from task kernel.")
+    swarm_send_parser.add_argument("--prompt", required=True, help="Task instructions for the agent.")
+    swarm_send_parser.add_argument("--sender", default=None, help="Sender agent ID (default: MEMORY_OS_AGENT_ID env var, or 'claude').")
+    swarm_send_parser.add_argument("--effort", choices=["low", "medium", "high"], default="", help="Override quantizer-derived effort tier in the [EFFORT] task header.")
+    swarm_send_parser.set_defaults(func=cmd_swarm_send)
+
+    swarm_watch_parser = subparsers.add_parser(
+        "swarm-watch", help="Block until an agent sends STATUS_REPORT for a task, then print the result."
+    )
+    swarm_watch_parser.add_argument("--task-id", required=True, dest="task_id", help="Task ID to wait for.")
+    swarm_watch_parser.add_argument("--timeout", type=int, default=300, help="Max seconds to wait (default 300).")
+    swarm_watch_parser.set_defaults(func=cmd_swarm_watch)
+
+    install_parser = subparsers.add_parser(
+        "install", help="Run universal system bootstrap and agent framework environment diagnostics."
+    )
+    install_parser.add_argument("--force", action="store_true", help="Force re-running full environment bootstrap check.")
+    install_parser.add_argument("--dry-run", action="store_true", help="Report diagnostic status without making system changes.")
+    install_parser.add_argument("--json", action="store_true", help="Output diagnostic results as JSON.")
+    install_parser.set_defaults(func=cmd_install)
+
+    ws_parser = subparsers.add_parser("workspace", help="Manage registered workspace profiles in ~/.memory_os/workspaces.toml.")
+    ws_subs = ws_parser.add_subparsers(dest="workspace_action")
+    ws_parser.set_defaults(func=cmd_workspace)
+
+    ws_list_parser = ws_subs.add_parser("list", help="List registered workspaces.")
+    ws_list_parser.add_argument("--json", action="store_true")
+    ws_list_parser.set_defaults(func=cmd_workspace)
+
+    ws_reg_parser = ws_subs.add_parser("register", help="Register current or specified workspace path.")
+    ws_reg_parser.add_argument("path", nargs="?", default=None)
+    ws_reg_parser.add_argument("--name", default=None)
+    ws_reg_parser.set_defaults(func=cmd_workspace)
+
+    ws_unreg_parser = ws_subs.add_parser("unregister", help="Unregister workspace by slug or path.")
+    ws_unreg_parser.add_argument("name")
+    ws_unreg_parser.set_defaults(func=cmd_workspace)
+
+    ws_tg_parser = ws_subs.add_parser("telegram-token", help="Configure or check a project-local Telegram bot token.")
+    ws_tg_parser.add_argument("path", nargs="?", default=None, help="Workspace path. Defaults to current --root/config workspace.")
+    ws_tg_parser.add_argument("--stdin", action="store_true", help="Read TELEGRAM_BOT_TOKEN from stdin.")
+    ws_tg_parser.add_argument("--check", action="store_true", help="Return whether project .env has TELEGRAM_BOT_TOKEN.")
+    ws_tg_parser.set_defaults(func=cmd_workspace)
+
+    ws_status_parser = ws_subs.add_parser("status", help="Show current workspace runtime status without launching or attaching.")
+    ws_status_parser.add_argument("--runtime", choices=["auto", "tmux", "zellij", "file"], default="auto")
+    ws_status_parser.add_argument("--json", action="store_true")
+    ws_status_parser.set_defaults(func=cmd_workspace)
+
+    ws_clean_parser = ws_subs.add_parser("clean-exited", help="List or delete EXITED workspace runtime sessions.")
+    ws_clean_parser.add_argument("--runtime", choices=["zellij"], default="zellij")
+    ws_clean_parser.add_argument("--apply", action="store_true", help="Actually delete listed EXITED sessions. Default is dry-run.")
+    ws_clean_parser.add_argument("--json", action="store_true")
+    ws_clean_parser.set_defaults(func=cmd_workspace)
+
+    ws_restart_parser = ws_subs.add_parser("restart-pane", help="Restart a specific agent/pane process in the workspace.")
+    ws_restart_parser.add_argument("name", help="Name of the agent/pane to restart (e.g. agent-manager, claude, codex, agy, telegram-chat).")
+    ws_restart_parser.set_defaults(func=cmd_workspace)
+
     return parser
 
+
 def main() -> int:
+    if len(sys.argv) == 1:
+        from memory_os.toolkit.bootstrap_installer import run_bootstrap
+        run_bootstrap(interactive=True)
+        if shutil.which("tmux") or shutil.which("zellij"):
+            from memory_os.toolkit.project_picker import select_workspace
+            from memory_os.toolkit.workspace import launch_workspace
+            from memory_os.toolkit.workspace_runtime import handle_workspace_menu_action
+            target_path = select_workspace()
+            if target_path is not None:
+                runtime_result = handle_workspace_menu_action(target_path)
+                if runtime_result and runtime_result.handled:
+                    if runtime_result.message:
+                        print(runtime_result.message)
+                    return 0
+                if isinstance(target_path, Path):
+                    from memory_os.toolkit.startup_profile import select_startup_profile
+                    profile = select_startup_profile()
+                    launch_workspace(target_path, profile=profile)
+                    return 0
+        parser = build_parser()
+        parser.print_help()
+        return 0
+
     parser = build_parser()
     args = parser.parse_args()
     

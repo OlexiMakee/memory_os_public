@@ -8,7 +8,7 @@ import json
 import re
 import sys
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
@@ -242,9 +242,9 @@ def auto_transition_proposals(root: Path) -> List[str]:
                     "status": "accepted"
                 }
                 
-                # Write event to file
-                with open(events_file, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(new_event) + "\n")
+                from memory_os.core.repository import MemoryRepository
+                from memory_os.core.storage import FileSystemMemoryStorage
+                MemoryRepository(FileSystemMemoryStorage(), config).emit_event(new_event)
                     
     if modified:
         # Write proposals back
@@ -256,8 +256,9 @@ def auto_transition_proposals(root: Path) -> List[str]:
         try:
             from memory_os.modules.lifecycle import LifecycleManager
             LifecycleManager(config).manifest()
-        except Exception:
-            pass
+        except Exception as _e:
+            import sys as _sys
+            print(f'Ignored exception: {_e}', file=_sys.stderr)
             
     return messages
 
@@ -277,7 +278,7 @@ def audit(root: Path = ROOT) -> Dict[str, Any]:
     auto_messages = auto_transition_proposals(root)
     
     report = {
-        "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "root": str(root),
         "handshake": parse_handshake(read_text(config.root_dir / "agent_context" / "HANDSHAKE.md")),
         "workflows_contract_exists": (config.root_dir / "agent_context" / "WORKFLOWS.md").exists(),

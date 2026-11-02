@@ -1,0 +1,5 @@
+{
+  "kind": "agent_action",
+  "pass_threshold": 0.66,
+  "description": "Checks whether the configured ActionBrain returns valid JSON and picks the correct action name for simple fixture tasks. Skips cleanly with no LLM key and no local Ollama reachable. This is the eval gate AdapterRegistry.promote()/reject() decisions should be based on."
+}

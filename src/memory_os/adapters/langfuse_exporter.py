@@ -137,8 +137,9 @@ class LangfuseExporter:
                         start_time = datetime.fromisoformat(t_str)
                         latency_ms = int(row.get("latency_ms") or 0)
                         end_time = start_time + timedelta(milliseconds=latency_ms)
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        import sys as _sys
+                        print(f'Ignored exception: {_e}', file=_sys.stderr)
 
                 trace_metadata = {
                     "prompt_version": row.get("prompt_version") or "",
@@ -197,8 +198,9 @@ class LangfuseExporter:
                             t_str = t_str[:-1] + "+00:00"
                         start_time = datetime.fromisoformat(t_str)
                         end_time = start_time + timedelta(milliseconds=duration_ms)
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        import sys as _sys
+                        print(f'Ignored exception: {_e}', file=_sys.stderr)
 
                 meta_dict = {}
                 raw_metadata = row.get("metadata")

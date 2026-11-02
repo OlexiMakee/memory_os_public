@@ -6,6 +6,8 @@ from pathlib import Path
 
 from memory_os import MemoryOSConfig
 from memory_os.core.logger import get_logger
+from memory_os.core.repository import MemoryRepository
+from memory_os.core.storage import FileSystemMemoryStorage
 from memory_os.modules.validator import MemoryValidator
 
 logger = get_logger(__name__)
@@ -128,13 +130,9 @@ class DocumentIngestor:
                 new_edges_added += 1
 
         self.config.memory_dir.mkdir(parents=True, exist_ok=True)
-        with open(nodes_path, "w", encoding="utf-8") as f:
-            for node in existing_nodes.values():
-                f.write(json.dumps(node, ensure_ascii=False) + "\n")
-                
-        with open(edges_path, "w", encoding="utf-8") as f:
-            for edge in existing_edges:
-                f.write(json.dumps(edge, ensure_ascii=False) + "\n")
+        repo = MemoryRepository(FileSystemMemoryStorage(), self.config)
+        repo.replace_nodes(list(existing_nodes.values()))
+        repo.replace_edges(existing_edges)
                 
         logger.info(f"Graph sync complete. Created {created_count} nodes, updated {updated_count} nodes, added {new_edges_added} edges.")
         
@@ -148,10 +146,7 @@ class DocumentIngestor:
             logger.warning("Validation warnings/errors after sync:\n" + "\n".join(errors))
             
         logger.info("Syncing memories to SQLite search index...")
-        from memory_os.core.repository import MemoryRepository
-        from memory_os.core.storage import FileSystemMemoryStorage
-        repo = MemoryRepository(FileSystemMemoryStorage(), self.config)
-        repo.sync_graph_nodes()
+        repo.sync_sqlite()
         logger.info("SQLite search index synced successfully.")
         
         return True

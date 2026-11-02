@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -15,8 +15,10 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from memory_os import load_toml_file
+from memory_os.core.toml_compat import load_toml_path
 from memory_os.toolkit.quantizer import LEVEL_SCALE
+
+UTC = timezone.utc
 
 
 REQUIRED_FIELDS = {
@@ -29,11 +31,28 @@ REQUIRED_FIELDS = {
     "tools",
     "verification",
 }
-ALLOWED_MODEL_POLICIES = {"cheap_free", "codex", "strong_cloud", "large_reasoning"}
+_DEFAULT_MODEL_POLICIES = {"cheap_free", "codex", "strong_cloud", "large_reasoning"}
+
+
+def _load_allowed_model_policies() -> set[str]:
+    """Load from architecture.toml [workflows] if available, else defaults."""
+    arch_path = ROOT / "architecture.toml"
+    if arch_path.exists():
+        try:
+            data = load_toml_path(arch_path)
+            extra = data.get("workflows", {}).get("allowed_model_policies")
+            if isinstance(extra, list):
+                return _DEFAULT_MODEL_POLICIES | set(extra)
+        except (OSError, ValueError, KeyError):
+            pass
+    return _DEFAULT_MODEL_POLICIES
+
+
+ALLOWED_MODEL_POLICIES = _load_allowed_model_policies()
 
 
 def utc_now_iso() -> str:
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def load_specs(root: Path = ROOT) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -45,7 +64,7 @@ def load_specs(root: Path = ROOT) -> Tuple[List[Dict[str, Any]], List[str]]:
 
     for path in sorted(workflows_dir.glob("*.toml")):
         try:
-            data = load_toml_file(str(path))
+            data = load_toml_path(path)
         except Exception as exc:
             errors.append(f"{path.relative_to(root)}: parse failed: {exc}")
             continue

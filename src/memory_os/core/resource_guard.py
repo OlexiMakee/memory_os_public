@@ -15,13 +15,19 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Optional
+from typing import Any, Dict, Optional
 
 try:
     import psutil
     _PSUTIL = True
 except ImportError:
     _PSUTIL = False
+
+DEFAULT_LOAD_CONFIG: Dict[str, float] = {
+    "max_cpu": 75.0,   # % — above this, inference is paused
+    "max_ram": 85.0,   # %
+    "max_temp": 80.0,  # °C — used only when sensor is available
+}
 
 
 class LoadSnapshot:
@@ -62,13 +68,15 @@ class ResourceGuard:
 
     def __init__(
         self,
-        max_cpu:  float = 75.0,   # % — above this, inference is paused
-        max_ram:  float = 85.0,   # %
-        max_temp: float = 80.0,   # °C — used only when sensor is available
+        max_cpu:  Optional[float] = None,   # % — above this, inference is paused
+        max_ram:  Optional[float] = None,   # %
+        max_temp: Optional[float] = None,   # °C — used only when sensor is available
+        config: Optional[Any] = None,
     ):
-        self.max_cpu  = max_cpu
-        self.max_ram  = max_ram
-        self.max_temp = max_temp
+        settings = {**DEFAULT_LOAD_CONFIG, **(config.data.get("resources", {}) if config else {})}
+        self.max_cpu  = max_cpu if max_cpu is not None else settings["max_cpu"]
+        self.max_ram  = max_ram if max_ram is not None else settings["max_ram"]
+        self.max_temp = max_temp if max_temp is not None else settings["max_temp"]
 
     # ------------------------------------------------------------------
     def snapshot(self) -> LoadSnapshot:
@@ -118,6 +126,7 @@ class ResourceGuard:
             for entries in sensors.values():
                 if entries:
                     return max(e.current for e in entries)
-        except Exception:
-            pass
+        except Exception as _e:
+            import sys as _sys
+            print(f'Ignored exception: {_e}', file=_sys.stderr)
         return None

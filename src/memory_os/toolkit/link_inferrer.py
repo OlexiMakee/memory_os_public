@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import math
+from memory_os.toolkit.agent_registry import KNOWN_AGENTS
 import re
 from collections import defaultdict
 from datetime import datetime
@@ -72,6 +73,64 @@ _STOPWORDS: Set[str] = {
     "these", "those", "param", "field", "list", "type", "data",
     "node", "edge", "memory", "agent",
 }
+
+_GENERIC_TAGS: Set[str] = {
+    "agent_comm", "task_assign", "status_report", "direct",
+    *KNOWN_AGENTS, "telegram",
+}
+
+_DRY_RUN_EDGE_LIMIT = 200
+_MAX_NEW_EDGES_PER_NODE = 8
+_LOW_VALUE_INVENTORY_ROLES = {"systemd_service", "port", "filesystem_inventory"}
+
+
+def _is_linkable_node(node: dict) -> bool:
+    tags = {str(tag).lower() for tag in node.get("tags", [])}
+    return (
+        node.get("indexable", True)
+        and node.get("domain") != "agent_comm"
+        and "agent_comm" not in tags
+        and not str(node.get("id", "")).startswith("comm:")
+    )
+
+def _inventory_node_role(node: Optional[dict]) -> str:
+    if not node:
+        return ""
+    node_id = str(node.get("id", "")).lower()
+    node_type = str(node.get("type", "")).lower().replace("-", "_")
+    tags = {str(tag).lower().replace("-", "_") for tag in node.get("tags", [])}
+
+    if (
+        node_id.startswith("service:systemd:")
+        or node_type in {"systemd_service", "systemd_unit"}
+        or {"linux_inventory", "systemd", "service"}.issubset(tags)
+    ):
+        return "systemd_service"
+    if (
+        node_id.startswith("port:")
+        or node_type in {"port", "network_port"}
+        or ("linux_inventory" in tags and "port" in tags)
+    ):
+        return "port"
+    if node_id.startswith("fs:") and "linux_inventory" in tags and "filesystem" in tags:
+        return "filesystem_inventory"
+    return ""
+
+
+def _is_low_value_inventory_cooccurrence(
+    edge_type: str,
+    source_node: Optional[dict],
+    target_node: Optional[dict],
+    reason: str,
+) -> bool:
+    if edge_type != "depends_on":
+        return False
+    if not (reason.startswith("bm25:") or reason == "text-match"):
+        return False
+    source_role = _inventory_node_role(source_node)
+    target_role = _inventory_node_role(target_node)
+    return source_role in _LOW_VALUE_INVENTORY_ROLES and target_role in _LOW_VALUE_INVENTORY_ROLES
+
 
 def _tokenize(text: str) -> List[str]:
     """Lowercase words ≥4 chars, minus stopwords. Shared by all Stage-0 methods."""
@@ -129,7 +188,6 @@ def _build_inverted(tokenized: List[List[str]]) -> Dict[str, List[int]]:
 # Patterns to infer edge type from the source node's summary.
 _RE_TRIGGERS   = re.compile(r"\b(trigger|cause|initiat|launch|invok|activat|call|emit)\w*\b", re.I)
 _RE_CONFIGURES = re.compile(r"\b(configur|set[s ]up|control|parameter|option|setting|tune)\w*\b", re.I)
-_RE_REFUTES    = re.compile(r"\b(refut|contradict|supersed|replac|overrid|deprecat|negate)\w*\b", re.I)
 _RE_SECURES    = re.compile(r"\b(secur|authenticat|authoriz|protect|encrypt|validat)\w*\b", re.I)
 _RE_CONTAINS   = re.compile(r"\b(contain|includ|part of|consist|compris)\w*\b", re.I)
 
@@ -138,6 +196,17 @@ def _infer_edge_type(summary_a: str, id_a: str, id_b: str) -> str:
     """
     Best-effort edge type from source node's summary text.
     Falls back to depends_on when no pattern matches.
+
+    "refutes" is deliberately never inferred here: RelationContractRegistry
+    gates it at min_create_protocol=7 (same trust tier as supersedes/
+    overrides), but _edge_protocol_level() self-assigns that level by
+    construction rather than checking an external authorization -- so the
+    contract enforces nothing against this heuristic. A source summary
+    merely containing an everyday word like "override"/"replace"/"deprecate"
+    (common in software engineering prose) was enough to auto-stale three
+    previously-verified nodes purely on bm25 co-occurrence, with no actual
+    contradiction between the two nodes' content. refutes requires real
+    semantic judgment (LLM-assisted or human-authored patch), not regex.
     """
     # ID-hierarchy takes priority: if id_a starts with id_b → id_b contains id_a
     parts_a = re.split(r"[._\-/]", id_a)
@@ -145,8 +214,6 @@ def _infer_edge_type(summary_a: str, id_a: str, id_b: str) -> str:
     if len(parts_b) < len(parts_a) and parts_a[: len(parts_b)] == parts_b:
         return "contains"
 
-    if _RE_REFUTES.search(summary_a):
-        return "refutes"
     if _RE_TRIGGERS.search(summary_a):
         return "triggers"
     if _RE_CONFIGURES.search(summary_a):
@@ -156,6 +223,19 @@ def _infer_edge_type(summary_a: str, id_a: str, id_b: str) -> str:
     if _RE_CONTAINS.search(summary_a):
         return "contains"
     return "depends_on"
+
+
+def _edge_protocol_level(edge_type: str) -> int:
+    from memory_os.core.registry import RelationContractRegistry
+
+    contract = RelationContractRegistry().get_contract(edge_type)
+    if contract is None:
+        return 0
+    return max(
+        contract.default_protocol_level,
+        contract.min_create_protocol,
+        contract.min_verify_protocol,
+    )
 
 
 def _parse_ts(freshness: str) -> Optional[float]:
@@ -223,6 +303,8 @@ def infer_bm25(
             if canonical in best and best[canonical][0] >= score:
                 continue
             etype = _infer_edge_type(node_a.get("summary", ""), src, tgt)
+            if _is_low_value_inventory_cooccurrence(etype, node_a, node_b, f"bm25:{score:.1f}"):
+                continue
             edge = MemoryEdge(
                 source=src,
                 target=tgt,
@@ -274,7 +356,7 @@ def infer_structural(
 def infer_tags(
     nodes: List[dict],
     existing_pairs: Set[Tuple[str, str]],
-    min_shared: int = 1,
+    min_shared: int = 2,
 ) -> List[MemoryEdge]:
     """
     Tag co-occurrence: nodes sharing ≥min_shared tags are topically related.
@@ -283,7 +365,11 @@ def infer_tags(
     edges: List[MemoryEdge] = []
     tag_map: Dict[str, Set[str]] = {}
     for n in nodes:
-        tags = {t.lower() for t in n.get("tags", []) if len(t) >= 3}
+        tags = {
+            t.lower()
+            for t in n.get("tags", [])
+            if len(t) >= 3 and t.lower() not in _GENERIC_TAGS
+        }
         tag_map[n["id"]] = tags
 
     seen: Set[Tuple[str, str]] = set()
@@ -312,6 +398,18 @@ def infer_tags(
             ))
 
     return edges
+
+
+def _limit_edges_by_degree(edges: List[MemoryEdge], max_edges_per_node: int) -> List[MemoryEdge]:
+    degree: Dict[str, int] = defaultdict(int)
+    selected: List[MemoryEdge] = []
+    for edge in sorted(edges, key=lambda item: item.confidence, reverse=True):
+        if degree[edge.source] >= max_edges_per_node or degree[edge.target] >= max_edges_per_node:
+            continue
+        selected.append(edge)
+        degree[edge.source] += 1
+        degree[edge.target] += 1
+    return selected
 
 
 def infer_temporal(
@@ -397,7 +495,7 @@ def infer_embeddings(
     try:
         from memory_os.toolkit.embedding_provider import EmbeddingProvider
         from memory_os.core.resource_guard import ResourceGuard
-        guard    = ResourceGuard()
+        guard    = ResourceGuard(config=config)
         provider = EmbeddingProvider(config=config, guard=guard)
         return provider.infer_edges(nodes, existing_pairs, top_k=top_k, min_cosine=min_cosine)
     except Exception as exc:
@@ -409,18 +507,84 @@ def infer_embeddings(
 # Stage 2 stub — local LM for edge-type refinement
 # ---------------------------------------------------------------------------
 
-def refine_edge_types_lm(edges: List[MemoryEdge]) -> List[MemoryEdge]:
-    """
-    Placeholder for Stage 2: small local LM (qwen2.5:0.5b via Ollama) to
-    reclassify depends_on edges into more specific types.
+def refine_edge_types_lm(
+    edges: List[MemoryEdge],
+    nodes_by_id: Optional[Dict[str, dict]] = None,
+) -> List[MemoryEdge]:
+    """Stage 2: reclassify generic depends_on edges using llama-server constrained decoding.
 
-    Returns edges unchanged until a local LM provider is configured.
+    Uses the action llama-server (LLAMA_SERVER_URL) with a JSON schema constraint
+    so the model outputs a valid edge type directly — no parsing errors, ~30 tokens/edge.
+
+    Falls back to returning edges unchanged when:
+    - LLAMA_SERVER_URL is not set or server is unreachable
+    - The server returns an error for any individual edge (that edge keeps depends_on)
+
+    Only processes edges with type == "depends_on" to avoid reclassifying edges
+    that already have a specific type from Stage 0.
     """
+    import json as _json
+
     try:
-        from memory_os.toolkit.local_lm_refiner import refine  # type: ignore
-        return refine(edges)
+        from memory_os.core.llm_service import _discover_llama_server, _call_llama_server
     except ImportError:
         return edges
+
+    url = _discover_llama_server()
+    if not url:
+        return edges
+
+    _EDGE_TYPE_SCHEMA: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "type": {
+                "type": "string",
+                "enum": [
+                    "depends_on", "triggers", "configures", "contains",
+                    "refutes", "secures", "reads_from", "writes_to",
+                ],
+            }
+        },
+        "required": ["type"],
+    }
+
+    refined: List[MemoryEdge] = []
+    for edge in edges:
+        if edge.type != "depends_on":
+            refined.append(edge)
+            continue
+
+        src_summary = (nodes_by_id or {}).get(edge.source, {}).get("summary", edge.source)[:120]
+        tgt_summary = (nodes_by_id or {}).get(edge.target, {}).get("summary", edge.target)[:120]
+        prompt = (
+            f'Source: "{src_summary}"\n'
+            f'Target: "{tgt_summary}"\n'
+            f'Link reason: {edge.reason}\n'
+            'Classify the directed relationship from Source to Target. Output JSON only.'
+        )
+        try:
+            raw = _call_llama_server(url, prompt, _EDGE_TYPE_SCHEMA, max_tokens=30)
+            import re as _re
+            raw = _re.sub(r'.*?</think>\s*', '', raw, flags=_re.DOTALL).strip()
+            result = _json.loads(raw)
+            new_type = result.get("type", "depends_on")
+            if new_type and new_type != edge.type:
+                edge = MemoryEdge(
+                    source=edge.source,
+                    target=edge.target,
+                    type=new_type,
+                    domain=edge.domain,
+                    confidence=edge.confidence,
+                    evidence=edge.evidence,
+                    reason=f"{edge.reason}|stage2:{new_type}",
+                )
+        except Exception as _e:
+            import sys as _sys
+            print(f'Ignored exception: {_e}', file=_sys.stderr)  # keep original edge on any error
+        refined.append(edge)
+
+    logger.info(f"[LinkInferrer] Stage 2 refined {len([e for e in refined if 'stage2' in e.reason])} edges.")
+    return refined
 
 
 # ---------------------------------------------------------------------------
@@ -553,6 +717,8 @@ def infer_text(
                 continue
             score = _text_score(a, b)
             if score >= min_score:
+                if _is_low_value_inventory_cooccurrence("depends_on", a, b, "text-match"):
+                    continue
                 candidates.append(MemoryEdge(
                     source=a["id"],
                     target=b["id"],
@@ -577,6 +743,9 @@ class LinkInferrer:
         self.config = config
         self.nodes_path = Path(config.memory_dir) / "nodes.jsonl"
         self.edges_path = Path(config.memory_dir) / "edges.jsonl"
+        from memory_os.core.repository import MemoryRepository
+        from memory_os.core.storage import FileSystemMemoryStorage
+        self.repository = MemoryRepository(FileSystemMemoryStorage(), config)
 
     def _load_nodes(self) -> List[dict]:
         nodes = []
@@ -601,12 +770,11 @@ class LinkInferrer:
 
     def _write_edges(self, edges: List[MemoryEdge], existing_pairs: Set[Tuple[str, str]]) -> int:
         written = 0
-        with open(self.edges_path, "a", encoding="utf-8") as f:
-            for e in edges:
-                if (e.source, e.target) not in existing_pairs:
-                    f.write(json.dumps(e.to_dict(), ensure_ascii=False) + "\n")
-                    existing_pairs.add((e.source, e.target))
-                    written += 1
+        for e in edges:
+            if (e.source, e.target) not in existing_pairs:
+                self.repository.upsert_edge_with_protocol(e, protocol_level=_edge_protocol_level(e.type))
+                existing_pairs.add((e.source, e.target))
+                written += 1
         return written
 
     def run(
@@ -630,7 +798,7 @@ class LinkInferrer:
 
         # Filter before any processing
         before = len(nodes)
-        nodes = [n for n in nodes if n.get("indexable", True)]
+        nodes = [n for n in nodes if _is_linkable_node(n)]
         if exclude_types:
             nodes = [n for n in nodes if n.get("type") not in exclude_types]
         skipped = before - len(nodes)
@@ -681,9 +849,10 @@ class LinkInferrer:
                     for e in emb_edges:
                         existing_pairs.add((e.source, e.target))
 
-            # Stage 2: local LM type refinement (max only)
+            # Stage 2: LM edge-type refinement (max only, or when llama-server is up)
             if rmode == "max":
-                all_candidates = refine_edge_types_lm(all_candidates)
+                _nmap = {n["id"]: n for n in nodes}
+                all_candidates = refine_edge_types_lm(all_candidates, nodes_by_id=_nmap)
 
             # Stage 3: cloud LLM on nodes that Stage 0+1+2 left unlinked
             if rmode != "quiet":
@@ -772,8 +941,11 @@ class LinkInferrer:
             if key not in seen or e.confidence > seen[key].confidence:
                 seen[key] = e
 
-        new_edges = [e for e in seen.values() if (e.source, e.target) not in committed_pairs]
+        uncapped_new_edges = [e for e in seen.values() if (e.source, e.target) not in committed_pairs]
+        new_edges = _limit_edges_by_degree(uncapped_new_edges, _MAX_NEW_EDGES_PER_NODE)
         print(f"\nNew unique edges proposed: {len(new_edges)}")
+        if len(new_edges) < len(uncapped_new_edges):
+            print(f"Degree cap skipped {len(uncapped_new_edges) - len(new_edges)} noisy candidate(s).")
 
         if not new_edges:
             print("Nothing to add.")
@@ -781,8 +953,11 @@ class LinkInferrer:
 
         if dry_run:
             print("\n[dry-run] Would add:")
-            for e in sorted(new_edges, key=lambda x: -x.confidence):
+            for e in sorted(new_edges, key=lambda x: -x.confidence)[:_DRY_RUN_EDGE_LIMIT]:
                 print(f"  {e.source} → {e.target}  [{e.type}]  conf={e.confidence}  | {e.reason}")
+            remaining = len(new_edges) - _DRY_RUN_EDGE_LIMIT
+            if remaining > 0:
+                print(f"  ... {remaining} more edge(s) omitted from dry-run output")
             return 0
 
         written = self._write_edges(new_edges, committed_pairs)

@@ -162,8 +162,9 @@ class PhoenixExporter:
             if hasattr(tracer_provider, "force_flush"):
                 try:
                     tracer_provider.force_flush()
-                except Exception:
-                    pass
+                except Exception as _e:
+                    import sys as _sys
+                    print(f'Ignored exception: {_e}', file=_sys.stderr)
 
             return {
                 "ok": True,

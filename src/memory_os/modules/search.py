@@ -1,10 +1,14 @@
 import json
 from pathlib import Path
 from typing import List, Dict, Set, Any, Optional
+from memory_os.core.adapters import CodebaseDomainAdapter, DomainAdapterRegistry
 from memory_os.core.interfaces import IMemoryOSConfig, IMemoryStorage
+from memory_os.core.node_stats import NodeStatsStore
 from memory_os.core.repository import MemoryRepository
 from memory_os.core.config import MemoryOSConfig
 from memory_os.core.storage import FileSystemMemoryStorage
+
+VERBATIM_QUERY_SCORE = 10.0
 
 class MemorySearcher:
     """Queries Memory OS nodes, codebase symbols, and traverses graph relations."""
@@ -12,24 +16,91 @@ class MemorySearcher:
     def __init__(
         self,
         config: Optional[IMemoryOSConfig] = None,
-        repository: Optional[MemoryRepository] = None
+        repository: Optional[MemoryRepository] = None,
+        domain_adapters: Optional[DomainAdapterRegistry] = None,
     ):
         self.config = config or MemoryOSConfig()
         storage = FileSystemMemoryStorage()
         self.storage = storage
-        self.repository = repository or MemoryRepository(storage, self.config)
+        if repository is None:
+            from memory_os.core.core import MemoryOS
+            repository = MemoryRepository(storage, self.config, indexer=MemoryOS(self.config))
+        self.repository = repository
         self._query_cache = {}
         self._cache_version = ""
+        self.domain_adapters = domain_adapters or DomainAdapterRegistry()
+        self.codebase_adapter = self.domain_adapters.require("codebase")
+        if not isinstance(self.codebase_adapter, CodebaseDomainAdapter):
+            raise TypeError("codebase domain adapter must be a CodebaseDomainAdapter")
 
     def _load_nodes(self) -> List[Dict[str, Any]]:
-        main_nodes = self.storage.load_jsonl(self.config.memory_dir / "nodes.jsonl")
+        roots = getattr(self.config, "memory_roots", [self.config.root_dir])
+        seen_ids: Set[str] = set()
+        all_nodes: List[Dict[str, Any]] = []
+
+        for idx, root in enumerate(roots):
+            scope = "local" if idx == 0 else ("global" if root == Path.home() / ".memory_os" else "project")
+            nodes_path = root / "memory" / "nodes.jsonl"
+            if nodes_path.exists():
+                nodes = self.storage.load_jsonl(nodes_path)
+                for n in nodes:
+                    nid = n.get("id")
+                    if nid and nid not in seen_ids:
+                        seen_ids.add(nid)
+                        node_copy = dict(n)
+                        node_copy.setdefault("scope", scope)
+                        all_nodes.append(node_copy)
+
         internal_nodes = self.storage.load_jsonl(self.config.internal_memory_dir / "nodes.jsonl")
-        return main_nodes + internal_nodes
+        for n in internal_nodes:
+            nid = n.get("id")
+            if nid and nid not in seen_ids:
+                seen_ids.add(nid)
+                node_copy = dict(n)
+                node_copy.setdefault("scope", "internal")
+                all_nodes.append(node_copy)
+
+        # Patch-derived fallback nodes are only relevant when nodes.jsonl was
+        # never materialized (patch-only history); with a real graph file every
+        # applied patch is already reflected there.
+        patches_path = self.config.memory_dir / "patches.jsonl"
+        patch_fallback_active = not (self.config.memory_dir / "nodes.jsonl").exists()
+        for patch in self.storage.load_jsonl(patches_path) if patch_fallback_active else []:
+            if patch.get("status") != "applied" or patch.get("operation") != "upsert_node":
+                continue
+            nid = patch.get("target")
+            if not nid or nid in seen_ids:
+                continue
+            payload = patch.get("payload") or {}
+            node_payload = payload.get("node") if isinstance(payload.get("node"), dict) else {}
+            summary = node_payload.get("summary") or payload.get("summary") or patch.get("reason", "")
+            seen_ids.add(nid)
+            all_nodes.append({
+                "id": nid,
+                "type": node_payload.get("type") or patch.get("type", "fact"),
+                "summary": summary,
+                "evidence": node_payload.get("evidence") or patch.get("evidence", []),
+                "status": node_payload.get("status", "verified"),
+                "freshness": node_payload.get("freshness", ""),
+                "trust": node_payload.get("trust", "verified"),
+                "related_nodes": node_payload.get("related_nodes", []),
+                "tags": node_payload.get("tags", []),
+                "scope": "patch",
+            })
+
+        return all_nodes
 
     def _load_edges(self) -> List[Dict[str, Any]]:
-        main_edges = self.storage.load_jsonl(self.config.memory_dir / "edges.jsonl")
+        roots = getattr(self.config, "memory_roots", [self.config.root_dir])
+        all_edges: List[Dict[str, Any]] = []
+        for root in roots:
+            edges_path = root / "memory" / "edges.jsonl"
+            if edges_path.exists():
+                all_edges.extend(self.storage.load_jsonl(edges_path))
         internal_edges = self.storage.load_jsonl(self.config.internal_memory_dir / "edges.jsonl")
-        return main_edges + internal_edges
+        all_edges.extend(internal_edges)
+        return all_edges
+
 
     def _load_snapshot(self) -> Dict[str, Any]:
         snapshot_file = self.config.snapshot_file
@@ -72,80 +143,25 @@ class MemorySearcher:
     def _build_reverse_dep_map(
         self, items_by_file: Dict[str, Dict[str, Any]]
     ) -> Dict[str, Set[str]]:
-        """Build file -> set of files that import it (for blast radius queries)."""
-        all_files = list(items_by_file.keys())
-        reverse: Dict[str, Set[str]] = {f: set() for f in all_files}
-        for src_file, item in items_by_file.items():
-            for dep in item.get("meta", {}).get("dependencies", []):
-                dep_lower = dep.lower()
-                for other_file in all_files:
-                    other_path = Path(other_file)
-                    other_stem = other_path.stem.lower()
-                    other_mod = other_path.with_suffix("").as_posix().replace("/", ".").lower()
-                    if (dep_lower == other_stem
-                            or dep_lower == other_mod
-                            or other_mod.endswith("." + dep_lower)):
-                        if other_file != src_file:
-                            reverse[other_file].add(src_file)
-                            break
-        return reverse
+        return self.codebase_adapter.build_reverse_dependency_map(items_by_file)
 
     def traverse_dependents(
         self, start_files: Set[str], depth: int,
         reverse_map: Dict[str, Set[str]]
     ) -> Set[str]:
-        """Traverse reverse dependency edges — files that would be affected if start_files change."""
-        visited = set(start_files)
-        current_level = set(start_files)
-        for _ in range(depth):
-            next_level = set()
-            for filepath in current_level:
-                for dependent in reverse_map.get(filepath, set()):
-                    if dependent not in visited:
-                        next_level.add(dependent)
-                        visited.add(dependent)
-            current_level = next_level
-            if not current_level:
-                break
-        return visited
+        return self.codebase_adapter.traverse_dependents(start_files, depth, reverse_map)
 
     def traverse_dependencies(self, start_files: Set[str], depth: int,
                               items_by_file: Dict[str, Dict[str, Any]]) -> Set[str]:
-        visited = set(start_files)
-        current_level = set(start_files)
+        return self.codebase_adapter.traverse_dependencies(start_files, depth, items_by_file)
 
-        for _ in range(depth):
-            next_level = set()
-            for filepath in current_level:
-                item = items_by_file.get(filepath)
-                if not item:
-                    continue
-                dependencies = item.get("meta", {}).get("dependencies", [])
-                for dep in dependencies:
-                    dep_lower = dep.lower()
-                    for other_file in items_by_file:
-                        other_path = Path(other_file)
-                        other_name = other_path.stem.lower()
-                        other_mod = other_path.with_suffix("").as_posix().replace("/", ".").lower()
-                        if (dep_lower == other_name or 
-                            dep_lower in other_path.as_posix().lower().split("/") or
-                            dep_lower == other_mod or 
-                            other_mod.endswith("." + dep_lower)):
-                            if other_file not in visited:
-                                next_level.add(other_file)
-                                visited.add(other_file)
-            current_level = next_level
-            if not current_level:
-                break
-        return visited
-
-    def search_memory(self, query: str, depth: int = 1) -> List[Dict[str, Any]]:
+    def search_memory(self, query: str, depth: int = 1, semantic: bool = False) -> List[Dict[str, Any]]:
         current_version = getattr(self.repository, "get_version_hash", lambda: "")()
         if current_version and current_version != self._cache_version:
             self._query_cache.clear()
             self._cache_version = current_version
             
-        cache_key = (query, depth)
+        cache_key = (query, depth, semantic)
         if cache_key in self._query_cache:
             return self._query_cache[cache_key]
             
@@ -166,65 +182,111 @@ class MemorySearcher:
         matched_node_ids = set()
         node_scores = {}
         
-        sqlite_results = []
-        if getattr(self.repository, "indexer", None) and hasattr(self.repository.indexer, "search_graph_nodes"):
-            # Use Layered Retrieval via SQLite FTS5 (Phase 5)
-            # Remove characters that FTS5 considers syntax (e.g. quotes, brackets)
-            safe_query = re.sub(r'[^\w\s]', ' ', query).strip()
-            if safe_query:
-                # FTS5 needs asterisk for prefix matching on the last word for better semantic feel
-                fts_query = " ".join([w for w in safe_query.split()])
-                if fts_query:
-                    # Append * to the last term for prefix matching if it doesn't end with a space
-                    if not query.endswith(' '):
-                        fts_query += '*'
-                    sqlite_results = self.repository.indexer.search_graph_nodes(fts_query, limit=100)
-        
-        if sqlite_results:
-            # We got fast indexed results from SQLite!
-            for res in sqlite_results:
-                nid = res["id"]
-                matched_node_ids.add(nid)
-                # Ensure stale/superseded/archived are downranked
-                score = res.get("search_score", 1.0)
-                if res.get("status") in ["stale", "superseded"]:
-                    score *= 0.5
-                elif res.get("status") == "archived":
-                    score *= 0.1
-                node_scores[nid] = score
-        else:
-            # Fallback to pure Python fuzzy array scan
-            for node in nodes:
-                node_id = node.get("id")
-                if not node_id:
-                    continue
-                
-                score = 0.0
-                text_fields = [
-                    str(node_id),
-                    str(node.get("summary", "")),
-                    str(node.get("type", "")),
-                    " ".join(str(ev) for ev in node.get("evidence", []) or []),
-                    " ".join(str(tag) for tag in node.get("tags", []) or [])
-                ]
-                full_text = " ".join(text_fields).lower()
-                
-                if query_lower in full_text:
-                    score += 10.0
-                    
-                if query_tokens:
-                    node_tokens = tokenize(full_text)
-                    overlap = query_tokens.intersection(node_tokens)
-                    if len(query_tokens) > 0:
-                        score += (len(overlap) / len(query_tokens)) * 5.0
-                    
-                if score >= 1.5:
-                    if node.get("status") in ["stale", "superseded"]:
+        def _confidence_multiplier(node: Dict[str, Any]) -> float:
+            # Confidence-aware ranking (Phase 3): a 0.2-confidence draft should
+            # not outrank a verified fact on lexical overlap alone. Full
+            # confidence = 1.0x, zero confidence = 0.5x — downrank, never hide.
+            try:
+                conf = float(node.get("confidence", 1.0) or 1.0)
+            except (TypeError, ValueError):
+                conf = 1.0
+            return 0.5 + 0.5 * max(0.0, min(1.0, conf))
+
+        if not semantic:
+            sqlite_results = []
+            if getattr(self.repository, "indexer", None) and hasattr(self.repository.indexer, "search_graph_nodes"):
+                # Use Layered Retrieval via SQLite FTS5 (Phase 5)
+                # Remove characters that FTS5 considers syntax (e.g. quotes, brackets)
+                safe_query = re.sub(r'[^\w\s]', ' ', query).strip()
+                if safe_query:
+                    # FTS5 needs asterisk for prefix matching on the last word for better semantic feel
+                    fts_query = " ".join([w for w in safe_query.split()])
+                    if fts_query:
+                        # Append * to the last term for prefix matching if it doesn't end with a space
+                        if not query.endswith(' '):
+                            fts_query += '*'
+                        sqlite_results = self.repository.indexer.search_graph_nodes(fts_query, limit=100)
+            
+            if sqlite_results:
+                # We got fast indexed results from SQLite!
+                for res in sqlite_results:
+                    nid = res["id"]
+                    matched_node_ids.add(nid)
+                    # Ensure stale/superseded/archived are downranked
+                    score = res.get("search_score", 1.0)
+                    if res.get("status") in ["stale", "superseded"]:
                         score *= 0.5
-                    elif node.get("status") == "archived":
+                    elif res.get("status") == "archived":
                         score *= 0.1
-                    matched_node_ids.add(node_id)
-                    node_scores[node_id] = score
+                    score *= _confidence_multiplier(nodes_by_id.get(nid, res))
+                    node_scores[nid] = score
+            else:
+                # Fallback to pure Python fuzzy array scan
+                for node in nodes:
+                    node_id = node.get("id")
+                    if not node_id:
+                        continue
+                    
+                    score = 0.0
+                    text_fields = [
+                        str(node_id),
+                        str(node.get("summary", "")),
+                        str(node.get("type", "")),
+                        " ".join(str(ev) for ev in node.get("evidence", []) or []),
+                        " ".join(str(tag) for tag in node.get("tags", []) or [])
+                    ]
+                    full_text = " ".join(text_fields).lower()
+                    
+                    if query_lower in full_text:
+                        score += VERBATIM_QUERY_SCORE
+                        
+                    if query_tokens:
+                        node_tokens = tokenize(full_text)
+                        overlap = query_tokens.intersection(node_tokens)
+                        if len(query_tokens) > 0:
+                            score += (len(overlap) / len(query_tokens)) * 5.0
+                        
+                    if score >= 1.5:
+                        if node.get("status") in ["stale", "superseded"]:
+                            score *= 0.5
+                        elif node.get("status") == "archived":
+                            score *= 0.1
+                        score *= _confidence_multiplier(node)
+                        matched_node_ids.add(node_id)
+                        node_scores[node_id] = score
+
+        # Semantic search mode: forced by --semantic OR acting as fallback when lexical search yields 0 matches
+        if semantic or not matched_node_ids:
+            try:
+                from memory_os.toolkit.embedding_provider import EmbeddingProvider, _cosine
+                provider = EmbeddingProvider(config=self.config)
+                
+                if semantic:
+                    # Forced semantic search: dynamically generate embeddings for new nodes
+                    vec_cache = provider.embed_nodes(nodes)
+                else:
+                    # Fallback semantic search: load existing cache only
+                    vec_cache = provider._load_cache()
+                    
+                if len(vec_cache) >= 1:
+                    q_vec = provider._embed(query)
+                    if q_vec:
+                        for node in nodes:
+                            nid = node.get("id")
+                            if nid and nid in vec_cache:
+                                sim = _cosine(q_vec, vec_cache[nid])
+                                threshold = (
+                                    self.config.semantic_similarity_threshold
+                                    if semantic
+                                    else self.config.semantic_fallback_threshold
+                                )
+                                if sim >= threshold:
+                                    matched_node_ids.add(nid)
+                                    # Scale to BM25 score range so ranking is consistent
+                                    node_scores[nid] = sim * 9.0 * _confidence_multiplier(node)
+            except Exception as _e:
+                import sys as _sys
+                print(f'Ignored exception: {_e}', file=_sys.stderr)  # embedding unavailable — stay with empty result
 
         all_matched_node_ids = self.traverse_graph(matched_node_ids, depth, nodes_by_id, edges)
         matched_nodes = []
@@ -321,9 +383,97 @@ class MemorySearcher:
         final_results = matched_nodes + results_code
         self._query_cache[cache_key] = final_results
         
-        if self.repository and self.repository.indexer:
-            matched_ids = [n["id"] for n in matched_nodes if "id" in n]
-            if matched_ids:
+        # Access tracking — update node_stats.json (works without indexer).
+        matched_ids = [n["id"] for n in matched_nodes if "id" in n]
+        if matched_ids:
+            if self.repository and self.repository.indexer:
                 getattr(self.repository.indexer, "log_node_access", lambda x: None)(matched_ids)
-                
+            try:
+                stats_path = self.config.memory_dir / "node_stats.json"
+                NodeStatsStore(stats_path, self.storage).record_access(matched_ids)
+            except Exception as _e:
+                import sys as _sys
+                print(f'Ignored exception: {_e}', file=_sys.stderr)
+
         return final_results
+
+    def incremental_sync(self, patch: Any) -> None:
+        """Incrementally update FTS index and invalidate embedding cache for touched node/edge IDs."""
+        from memory_os.core.core import MemoryOS
+        db = MemoryOS(self.config)
+        
+        # 1. Determine which nodes/edges were touched
+        touched_node_ids = set()
+        
+        if patch.operation in ("upsert_node", "update_node", "deprecate_node"):
+            if patch.target:
+                touched_node_ids.add(patch.target)
+        elif patch.operation == "replace_nodes":
+            db_summaries = db.get_graph_node_summaries()
+
+            self.repository.sync_graph_nodes()
+            nodes = self._load_nodes()
+            nodes_by_id = {n["id"]: n for n in nodes if n.get("id")}
+
+            invalidated_ids = []
+            for nid in db_summaries:
+                if nid not in nodes_by_id:
+                    invalidated_ids.append(nid)
+            for nid, node in nodes_by_id.items():
+                if nid in db_summaries and db_summaries[nid] != node.get("summary", ""):
+                    invalidated_ids.append(nid)
+            if invalidated_ids:
+                from memory_os.toolkit.embedding_provider import EmbeddingProvider
+                provider = EmbeddingProvider(config=self.config)
+                provider.invalidate_embeddings(invalidated_ids)
+            return
+
+        elif patch.operation == "upsert_edge":
+            db.insert_graph_edge(patch.source, patch.target, patch.type)
+            return
+        elif patch.operation == "delete_edge_soft":
+            db.delete_graph_edge(patch.source, patch.target, patch.type)
+            return
+        elif patch.operation == "replace_edges":
+            self.repository.sync_graph_edges()
+            return
+        else:
+            return
+
+        # 2. Process touched nodes
+        if not touched_node_ids:
+            return
+
+        nodes = self._load_nodes()
+        nodes_by_id = {n["id"]: n for n in nodes if n.get("id")}
+
+        old_summaries = db.get_graph_node_summaries(list(touched_node_ids))
+
+        for nid in touched_node_ids:
+            node = nodes_by_id.get(nid)
+            if node:
+                tags_str = ",".join(node.get("tags", [])) if node.get("tags") else None
+                db.insert_graph_node(
+                    node_id=nid,
+                    node_type=node.get("type", "fact"),
+                    summary=node.get("summary", ""),
+                    status=node.get("status", "draft"),
+                    freshness=node.get("freshness", ""),
+                    trust=node.get("trust", "unverified"),
+                    tags=tags_str,
+                )
+            else:
+                db.delete_graph_node(nid)
+
+        invalidated_ids = []
+        for nid in touched_node_ids:
+            node = nodes_by_id.get(nid)
+            if not node:
+                invalidated_ids.append(nid)
+            elif nid in old_summaries and old_summaries[nid] != node.get("summary", ""):
+                invalidated_ids.append(nid)
+
+        if invalidated_ids:
+            from memory_os.toolkit.embedding_provider import EmbeddingProvider
+            provider = EmbeddingProvider(config=self.config)
+            provider.invalidate_embeddings(invalidated_ids)

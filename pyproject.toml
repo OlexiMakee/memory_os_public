@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Portable agent Memory OS kernel — graph memory, telemetry, lifecycle, compaction, search."
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = []
+dependencies = [
+    "tomli>=1.1.0; python_version < '3.11'",
+]
 
 [project.scripts]
 memory_os = "memory_os.cli:main"
@@ -37,6 +39,10 @@ adapters-crewai = ["crewai"]
 adapters-llamaindex = ["llama-index"]
 adapters-semantic-kernel = ["semantic-kernel"]
 adapters-haystack = ["haystack-ai"]
+# Messaging adapters — stdlib urllib only; no extra package required.
+# Gateway/intents mode for Discord requires discord.py (install separately).
+adapters-telegram = []
+adapters-discord = []
 all = [
     "ollama>=0.1.0",
     "openai>=1.0.0",

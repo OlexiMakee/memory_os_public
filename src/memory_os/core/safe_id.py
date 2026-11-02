@@ -11,6 +11,7 @@ re-implementing (or forgetting) its own version.
 from __future__ import annotations
 
 import re
+import hashlib
 from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Optional
@@ -51,6 +52,20 @@ def validate_safe_node_id(value: str, label: str = "node id") -> str:
             "only, with no path separators, and must not start with '.'"
         )
     return value
+
+
+def node_id_slug(value: str, max_length: int = 96) -> str:
+    raw = str(value).strip().lower()
+    out = []
+    for char in raw:
+        if char.isalnum() or char in {".", "_", "-", ":"}:
+            out.append(char)
+        else:
+            out.append("-")
+    slug = "".join(out).strip(".-_:") or "unknown"
+    digest = hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:8]
+    budget = max(1, max_length - len(digest) - 1)
+    return f"{slug[:budget].strip('.-_:') or 'unknown'}-{digest}"
 
 
 def confine_to_root(path_str: str, root: Path) -> Path:

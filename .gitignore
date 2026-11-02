@@ -16,13 +16,51 @@ build/
 
 # Runtime state
 data/
-memory/
+memory/*
+!memory/nodes.jsonl
+!memory/edges.jsonl
+!memory/skills.lock.json
+.venv/
+.venv-train/
+unsloth_compiled_cache/
 swarm_backlog.json
 dummy_transcript.jsonl
 agent_context/memory_snapshot.json
+agent_context/codebase_map.md
 agent_context/task_capsules.jsonl
 agent_context/transcript.jsonl
 agent_context/memory_extract*/
+agent_context/tasks.jsonl
+agent_context/task_events.jsonl
+agent_context/loops.jsonl
+agent_context/lora_*.jsonl
+agent_context/leases.json
+agent_context/context_packs/
+agent_context/evidence/
+agent_context/agents/health_cache.json
+agent_context/agents/quota_monitor_state.json
+agent_context/agents/console_scan_state.json
+agent_context/inbox/
+agent_context/agents/logs/
+agent_context/done/
+agent_context/telegram_session.json
+agent_context/telegram_conversations.jsonl
+agent_context/agents/inbox_watch.json
+agent_context/agents/relay_watch.json
+agent_context/agents/runtime_health.json
+agent_context/agents/reconcile_state.json
+agent_context/knowledge/
+agent_context/archive/
+.agents/
+ORIGINAL_REQUEST.md
+
+# Project-specific external product artifacts live outside this repository
+/*_chat.json
+/agent_context/collab/*_presentation_variants.md
+
+
+# Secrets / local config
+.env
 
 # Local dev
 scratch.py
@@ -37,6 +75,30 @@ rename_legacy.py
 
 # One-off local helper scripts
 append_log.py
+fix_test.py
+fix_test2.py
+fix_test3.py
+launch_swarm.sh
+launch_swarm_v2.sh
+launch_swarm_v3.sh
+patch.py
+patch_cli.py
+patch_hygiene.py
+scripts/graph_cleanup.py
+refactor_agents.py
+refactor_agents_2.py
 
 # Local permissions
 antigravity-permissions-grant/
+
+# Lock files
+*.lock
+.*.lock
+
+agent_context/runtime/
+
+# Agent runtimes
+.claude/
+.codex/
+.gemini/
+.cursor/

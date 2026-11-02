@@ -9,7 +9,6 @@ providers, compaction, or UI — see DEV_STRATEGY.md Stage 1.
 from __future__ import annotations
 
 import json
-import sqlite3
 import shutil
 import time
 from dataclasses import dataclass
@@ -24,6 +23,11 @@ DEFAULT_RESOURCES_CONFIG: Dict[str, float] = {
     "max_sqlite_wal_mb": 64,
     "max_jsonl_total_mb": 128,
     "max_observed_growth_mb_per_hour": 128,
+}
+
+DEFAULT_MEMORY_CONFIG: Dict[str, float] = {
+    "events_soft_limit_mb": 16,
+    "patches_soft_limit_mb": 256,
 }
 
 
@@ -52,10 +56,16 @@ class DiskSnapshot:
     timestamp: float
     free_disk_mb: float
     jsonl_total_mb: float
+    events_jsonl_mb: float
+    events_soft_limit_mb: float
+    patches_jsonl_mb: float
+    patches_soft_limit_mb: float
     sqlite: SQLiteFileHealth
     growth_mb_per_hour: Optional[float]
     low_disk: bool
     exceeds_max_jsonl: bool
+    events_soft_limit_exceeded: bool
+    patches_soft_limit_exceeded: bool
     growth_alert: bool
 
     @property
@@ -66,6 +76,8 @@ class DiskSnapshot:
             or self.sqlite.exceeds_max_db
             or self.sqlite.exceeds_max_wal
             or self.exceeds_max_jsonl
+            or self.events_soft_limit_exceeded
+            or self.patches_soft_limit_exceeded
             or self.growth_alert
         ):
             return "hot"
@@ -76,10 +88,16 @@ class DiskSnapshot:
             "timestamp": self.timestamp,
             "free_disk_mb": self.free_disk_mb,
             "jsonl_total_mb": self.jsonl_total_mb,
+            "events_jsonl_mb": self.events_jsonl_mb,
+            "events_soft_limit_mb": self.events_soft_limit_mb,
+            "patches_jsonl_mb": self.patches_jsonl_mb,
+            "patches_soft_limit_mb": self.patches_soft_limit_mb,
             "sqlite": self.sqlite.to_dict(),
             "growth_mb_per_hour": self.growth_mb_per_hour,
             "low_disk": self.low_disk,
             "exceeds_max_jsonl": self.exceeds_max_jsonl,
+            "events_soft_limit_exceeded": self.events_soft_limit_exceeded,
+            "patches_soft_limit_exceeded": self.patches_soft_limit_exceeded,
             "growth_alert": self.growth_alert,
             "level": self.level,
         }
@@ -93,6 +111,10 @@ class DiskGuard:
         self.settings: Dict[str, float] = {
             **DEFAULT_RESOURCES_CONFIG,
             **config.data.get("resources", {}),
+        }
+        self.memory_settings: Dict[str, float] = {
+            **DEFAULT_MEMORY_CONFIG,
+            **config.data.get("memory", {}),
         }
         self.state_file = config.root_dir / "data" / "disk_guard_state.json"
 
@@ -128,6 +150,12 @@ class DiskGuard:
                 pass
         return round(total / (1024 * 1024), 3)
 
+    def _events_jsonl_mb(self) -> float:
+        return self._mb(self.config.memory_dir / "events.jsonl")
+
+    def _patches_jsonl_mb(self) -> float:
+        return self._mb(self.config.memory_dir / "patches.jsonl")
+
     def _free_disk_mb(self) -> float:
         try:
             usage = shutil.disk_usage(self.config.root_dir)
@@ -161,6 +189,8 @@ class DiskGuard:
         now = time.time()
         sqlite = self._sqlite_health()
         jsonl_mb = self._jsonl_total_mb()
+        events_jsonl_mb = self._events_jsonl_mb()
+        patches_jsonl_mb = self._patches_jsonl_mb()
         tracked_mb = sqlite.db_mb + sqlite.wal_mb + jsonl_mb
 
         growth_mb_per_hour = None
@@ -177,6 +207,10 @@ class DiskGuard:
         free_disk_mb = self._free_disk_mb()
         low_disk = free_disk_mb < self.settings["min_free_disk_mb"]
         exceeds_max_jsonl = jsonl_mb > self.settings["max_jsonl_total_mb"]
+        events_soft_limit_mb = self.memory_settings["events_soft_limit_mb"]
+        patches_soft_limit_mb = self.memory_settings["patches_soft_limit_mb"]
+        events_soft_limit_exceeded = events_jsonl_mb > events_soft_limit_mb
+        patches_soft_limit_exceeded = patches_jsonl_mb > patches_soft_limit_mb
         growth_alert = bool(
             growth_mb_per_hour is not None
             and growth_mb_per_hour > self.settings["max_observed_growth_mb_per_hour"]
@@ -186,56 +220,121 @@ class DiskGuard:
             timestamp=now,
             free_disk_mb=free_disk_mb,
             jsonl_total_mb=jsonl_mb,
+            events_jsonl_mb=events_jsonl_mb,
+            events_soft_limit_mb=events_soft_limit_mb,
+            patches_jsonl_mb=patches_jsonl_mb,
+            patches_soft_limit_mb=patches_soft_limit_mb,
             sqlite=sqlite,
             growth_mb_per_hour=growth_mb_per_hour,
             low_disk=low_disk,
             exceeds_max_jsonl=exceeds_max_jsonl,
+            events_soft_limit_exceeded=events_soft_limit_exceeded,
+            patches_soft_limit_exceeded=patches_soft_limit_exceeded,
             growth_alert=growth_alert,
         )
         self._save_state(now, tracked_mb, growth_mb_per_hour)
         return result
 
-    def checkpoint_sqlite(self, truncate: bool = True, dry_run: bool = False) -> Dict[str, Any]:
-        """Checkpoint the SQLite WAL without touching graph JSONL files."""
-        before = self._sqlite_health()
-        if dry_run:
-            return {
-                "ok": True,
-                "dry_run": True,
-                "action": "wal_checkpoint_truncate" if truncate else "wal_checkpoint",
-                "before": before.to_dict(),
-            }
+    def compact_patches(self, dry_run: bool = False) -> Dict[str, Any]:
+        """Archive superseded patch rows and externalize rollback snapshots from the hot log."""
+        patches_path = self.config.memory_dir / "patches.jsonl"
+        if not patches_path.exists():
+            return {"ok": True, "dry_run": dry_run, "action": "patch_archive", "detail": "patches.jsonl missing"}
 
-        db_path = self.config.db_path
-        if not db_path.exists():
-            return {"ok": False, "detail": "sqlite db not found", "before": before.to_dict()}
-
-        try:
-            conn = sqlite3.connect(str(db_path))
+        records = []
+        for idx, line in enumerate(patches_path.read_text(encoding="utf-8").splitlines()):
+            line = line.strip()
+            if not line:
+                continue
             try:
-                pragma = "wal_checkpoint(TRUNCATE)" if truncate else "wal_checkpoint(FULL)"
-                rows = conn.execute(f"PRAGMA {pragma}").fetchall()
-            finally:
-                conn.close()
-        except sqlite3.Error as exc:
-            return {"ok": False, "detail": f"checkpoint failed: {exc}", "before": before.to_dict()}
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            record["_line_idx"] = idx
+            records.append(record)
 
-        after = self._sqlite_health()
-        return {
+        latest_line_by_id: Dict[str, int] = {}
+        for record in records:
+            patch_id = str(record.get("id", "")).strip()
+            if patch_id:
+                latest_line_by_id[patch_id] = int(record["_line_idx"])
+
+        keep_lines = set(latest_line_by_id.values())
+        kept = [record for record in records if int(record["_line_idx"]) in keep_lines]
+        archived = [record for record in records if int(record["_line_idx"]) not in keep_lines]
+        rollback_archive_candidates = []
+        rollback_archive_ids = set()
+        keep_payload = []
+        for record in kept:
+            clean = {k: v for k, v in record.items() if k != "_line_idx"}
+            payload = clean.get("payload")
+            if not isinstance(payload, dict):
+                keep_payload.append(clean)
+                continue
+            rollback = payload.get("_rollback")
+            if not isinstance(rollback, dict):
+                keep_payload.append(clean)
+                continue
+            payload = dict(payload)
+            payload.pop("_rollback", None)
+            patch_id = str(clean.get("id", ""))
+            rollback_archive_candidates.append({
+                "patch_id": patch_id,
+                "rollback": rollback,
+            })
+            rollback_archive_ids.add(patch_id)
+            clean["payload"] = payload
+            keep_payload.append(clean)
+        result = {
             "ok": True,
-            "dry_run": False,
-            "action": "wal_checkpoint_truncate" if truncate else "wal_checkpoint",
-            "before": before.to_dict(),
-            "after": after.to_dict(),
-            "sqlite_result": [list(row) for row in rows],
+            "dry_run": dry_run,
+            "action": "patch_archive",
+            "before_records": len(records),
+            "kept_records": len(keep_payload),
+            "archived_records": len(archived),
+            "rollback_archived_records": len(rollback_archive_candidates),
         }
+        if dry_run or (not archived and not rollback_archive_candidates):
+            return result
+
+        archive_dir = self.config.memory_dir / "archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = archive_dir / f"patches-{int(time.time())}.jsonl"
+        archive_payload = [{k: v for k, v in record.items() if k != "_line_idx"} for record in archived]
+        if archive_payload:
+            archive_path.write_text(
+                "\n".join(json.dumps(record, ensure_ascii=False) for record in archive_payload) + "\n",
+                encoding="utf-8",
+            )
+            result["archive_path"] = str(archive_path)
+        if rollback_archive_candidates:
+            rollback_archive_path = archive_dir / f"patch-rollbacks-{int(time.time())}.jsonl"
+            rollback_archive_path.write_text(
+                "\n".join(json.dumps(record, ensure_ascii=False) for record in rollback_archive_candidates) + "\n",
+                encoding="utf-8",
+            )
+            rollback_relpath = rollback_archive_path.relative_to(self.config.root_dir)
+            for record in keep_payload:
+                payload = record.get("payload")
+                if not isinstance(payload, dict) or "_rollback" in payload:
+                    continue
+                if str(record.get("id", "")) not in rollback_archive_ids:
+                    continue
+                payload["_rollback_archived"] = True
+                payload["_rollback_archive"] = str(rollback_relpath)
+            result["rollback_archive_path"] = str(rollback_archive_path)
+        patches_path.write_text(
+            "\n".join(json.dumps(record, ensure_ascii=False) for record in keep_payload) + "\n",
+            encoding="utf-8",
+        )
+        return result
 
     def compact(self, dry_run: bool = False) -> Dict[str, Any]:
         """Run bounded local resource compaction actions."""
-        checkpoint = self.checkpoint_sqlite(truncate=True, dry_run=dry_run)
+        patch_archive = self.compact_patches(dry_run=dry_run)
         return {
-            "ok": bool(checkpoint.get("ok")),
+            "ok": bool(patch_archive.get("ok")),
             "dry_run": dry_run,
-            "checkpoint": checkpoint,
+            "patch_archive": patch_archive,
             "snapshot": self.snapshot().to_dict(),
         }

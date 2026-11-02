@@ -1,0 +1,60 @@
+[canonical_modules]
+# List of modules that are allowed to import specific raw standard libraries
+tomllib = ["src/memory_os/core/toml_compat.py", "src/memory_os/core/release_check.py", "src/memory_os/core/config.py"]
+sqlite3 = [
+    "src/memory_os/adapters/duckdb_adapter.py", 
+    "src/memory_os/core/db.py",
+    "src/memory_os/core/telemetry_policy.py",
+    "src/memory_os/core/core.py",
+    "src/memory_os/toolkit/doctor.py",
+    "src/memory_os/adapters/otel_exporter.py",
+    "src/memory_os/adapters/phoenix_exporter.py"
+]
+socket = [
+    "src/memory_os/toolkit/daemon_client.py", 
+    "src/memory_os/toolkit/multiplexer_manager.py",
+    "src/memory_os/linux_inventory.py",
+    "src/memory_os/core/daemon.py",
+    "src/memory_os/core/daemon_ipc.py"
+]
+subprocess = [
+    "src/memory_os/modules/undo_service.py",
+    "src/memory_os/toolkit/git_commit_safe.py",
+    "src/memory_os/toolkit/workspace_runtime.py",
+    "src/memory_os/toolkit/zellij_runtime.py", 
+    "src/memory_os/toolkit/daemon_client.py",
+    "src/memory_os/toolkit/quota_harvester.py",
+    "src/memory_os/toolkit/usage_probe.py",
+    "src/memory_os/toolkit/dispatcher.py",
+    "src/memory_os/linux_inventory.py",
+    "src/memory_os/cli.py",
+    "src/memory_os/cli_groups/system_cmds.py",
+    "src/memory_os/cli_groups/telegram_cmds.py",
+    "src/memory_os/core/daemon_housekeeping.py",
+    "src/memory_os/core/release_check.py",
+    "src/memory_os/core/alerts.py",
+    "src/memory_os/core/llm_service.py",
+    "src/memory_os/core/evidence.py",
+    "src/memory_os/core/daemon.py",
+    "src/memory_os/ui/server.py",
+    "src/memory_os/toolkit/pipeline.py",
+    "src/memory_os/toolkit/auditor.py",
+    "src/memory_os/toolkit/agent_comm.py",
+    "src/memory_os/toolkit/project_picker.py",
+    "src/memory_os/toolkit/skill_registry.py",
+    "src/memory_os/toolkit/agent_manager.py",
+    "src/memory_os/toolkit/worktree.py",
+    "src/memory_os/toolkit/agent_health.py",
+    "src/memory_os/toolkit/local_agent.py",
+    "src/memory_os/toolkit/runtime_control.py",
+    "src/memory_os/toolkit/workspace_adapter.py",
+    "src/memory_os/toolkit/linux_provisioner.py",
+    "src/memory_os/toolkit/xfce_manager.py",
+    "src/memory_os/toolkit/model_catalog.py",
+    "src/memory_os/toolkit/bootstrap_installer.py",
+    "src/memory_os/toolkit/multiplexer_manager.py",
+    "src/memory_os/adapters/_relay.py"
+]
+
+[forbidden_patterns]
+bare_except = "Do not use 'except Exception: pass'. Use explicit exceptions and log them."

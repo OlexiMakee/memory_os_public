@@ -79,9 +79,9 @@ class PromptRegistry:
                     "sha256": sha256,
                     "path": str(file_path)
                 })
-            except Exception:
-                # If a file is corrupt, skip or handle gracefully in listing
-                pass
+            except Exception as _e:
+                import sys as _sys
+                print(f'Ignored exception: {_e}', file=_sys.stderr)
         return results
 
     def show(self, prompt_id: str) -> Dict[str, Any]:
@@ -98,8 +98,9 @@ class PromptRegistry:
                     result["sha256"] = sha256
                     result["path"] = str(file_path)
                     return result
-            except Exception:
-                pass
+            except Exception as _e:
+                import sys as _sys
+                print(f'Ignored exception: {_e}', file=_sys.stderr)
                 
         raise FileNotFoundError(f"Prompt with ID '{prompt_id}' not found.")
 

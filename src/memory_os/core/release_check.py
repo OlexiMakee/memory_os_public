@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import re
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from memory_os.core.disk_guard import DiskGuard
 from memory_os.core.security_scan import SecurityScanner
 from memory_os.core.telemetry_policy import TelemetryPolicy
 from memory_os.core.write_budget import ArtifactWriteBudget
+from memory_os.toolkit.eval_runner import EvalRunner
 
 
 PRIVATE_MARKERS = (
@@ -69,9 +71,13 @@ class ReleaseChecker:
             self._check_context_privacy(),
             self._check_docs_hygiene(),
             self._check_core_dependencies(),
+            self._check_graph_write_path(),
+            self._check_local_evals(),
             self._check_resources(),
             self._check_write_budget(),
             self._check_telemetry(),
+            self._check_architectural_boundaries(),
+            self._check_bare_except_debt(),
         ]
         if target == "public":
             checks.extend([
@@ -192,6 +198,98 @@ class ReleaseChecker:
             "mandatory dependency list is empty/core-only" if not forbidden else f"provider/tool deps are mandatory: {', '.join(forbidden)}",
         )
 
+    def _check_graph_write_path(self) -> ReleaseCheck:
+        source_root = self.config.root_dir / "src" / "memory_os"
+        if not source_root.is_dir():
+            return ReleaseCheck("graph-write-path", True, "source tree not present")
+
+        allowed = {
+            Path("core/repository.py"),
+            Path("core/storage.py"),
+            Path("core/interfaces.py"),
+        }
+        hits: List[str] = []
+        for path in source_root.rglob("*.py"):
+            rel = path.relative_to(source_root)
+            if rel in allowed:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+                tree = ast.parse(text)
+            except Exception:
+                continue
+
+            canonical_names = self._canonical_graph_path_names(tree, text)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if self._is_canonical_jsonl_write(node, canonical_names, text):
+                    hits.append(f"{Path('src/memory_os') / rel}:{getattr(node, 'lineno', '?')}")
+
+        return ReleaseCheck(
+            "graph-write-path",
+            not hits,
+            "canonical graph writes are repository/patch backed" if not hits else "direct canonical graph writes [CR-GRAPH]: " + "; ".join(hits[:20]),
+        )
+
+    def _canonical_graph_path_names(self, tree: ast.AST, text: str) -> set[str]:
+        names: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            segment = ast.get_source_segment(text, node.value) or ""
+            if not self._segment_targets_canonical_graph(segment):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        return names
+
+    def _is_canonical_jsonl_write(self, node: ast.Call, canonical_names: set[str], text: str) -> bool:
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            if func.attr in {"save_jsonl", "append_jsonl"} and node.args:
+                return self._arg_targets_canonical_graph(node.args[0], canonical_names, text)
+            if func.attr == "write_text" and isinstance(func.value, ast.Name):
+                return func.value.id in canonical_names
+        if isinstance(func, ast.Name) and func.id == "open" and node.args:
+            if not self._arg_targets_canonical_graph(node.args[0], canonical_names, text):
+                return False
+            if len(node.args) < 2:
+                return False
+            mode = node.args[1]
+            if isinstance(mode, ast.Constant) and isinstance(mode.value, str):
+                return any(flag in mode.value for flag in ("w", "a", "x", "+"))
+        return False
+
+    def _arg_targets_canonical_graph(self, arg: ast.AST, canonical_names: set[str], text: str) -> bool:
+        if isinstance(arg, ast.Name) and arg.id in canonical_names:
+            return True
+        segment = ast.get_source_segment(text, arg) or ""
+        return self._segment_targets_canonical_graph(segment)
+
+    def _segment_targets_canonical_graph(self, segment: str) -> bool:
+        return any(
+            quoted in segment
+            for quoted in ('"nodes.jsonl"', "'nodes.jsonl'", '"edges.jsonl"', "'edges.jsonl'")
+        )
+
+    def _check_local_evals(self) -> ReleaseCheck:
+        runner = EvalRunner(self.config)
+        suites = ("retrieval-relevance",)
+        results = []
+        failures = []
+        for suite in suites:
+            result = runner.run(suite)
+            results.append(f"{suite}:{result.get('pass_rate', 0.0):.2f}")
+            if not result.get("ok", False):
+                failures.append(f"{suite}={result.get('pass_rate', 0.0):.2f}<{result.get('pass_threshold', 1.0)}")
+        return ReleaseCheck(
+            "eval-gate",
+            not failures,
+            " ; ".join(results) if not failures else "; ".join(failures),
+        )
+
     def _check_resources(self) -> ReleaseCheck:
         snap = DiskGuard(self.config).snapshot()
         return ReleaseCheck(
@@ -221,6 +319,73 @@ class ReleaseChecker:
             not over,
             f"db={report['db_mb']}MB rows=" + ",".join(f"{t['table']}:{t['row_count']}" for t in report["tables"]),
         )
+
+    def _check_architectural_boundaries(self) -> ReleaseCheck:
+        ownership_file = self.config.root_dir / "architecture.toml"
+        if not ownership_file.exists():
+            return ReleaseCheck("architecture-boundaries", True, "architecture.toml not found, skipping check")
+        
+        try:
+            from memory_os.core.toml_compat import load_toml_path
+            ownership = load_toml_path(ownership_file)
+            canonical = ownership.get("canonical_modules", {})
+            forbidden_patterns = ownership.get("forbidden_patterns", {})
+        except Exception as exc:
+            return ReleaseCheck("architecture-boundaries", False, f"failed to load architecture.toml: {exc}")
+            
+        source_root = self.config.root_dir / "src" / "memory_os"
+        if not source_root.is_dir():
+            return ReleaseCheck("architecture-boundaries", True, "source tree not present")
+            
+        import_hits = []
+        except_hits = []
+        for path in source_root.rglob("*.py"):
+            rel = path.relative_to(source_root)
+            rel_str = f"src/memory_os/{rel}"
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+                tree = ast.parse(text)
+            except Exception:
+                continue
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        mod = alias.name.split('.')[0]
+                        if mod in canonical and rel_str not in canonical[mod]:
+                            import_hits.append(f"{rel_str}:{getattr(node, 'lineno', '?')} imported forbidden {mod}")
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module:
+                        mod = node.module.split('.')[0]
+                        if mod in canonical and rel_str not in canonical[mod]:
+                            import_hits.append(f"{rel_str}:{getattr(node, 'lineno', '?')} imported forbidden {mod}")
+                elif isinstance(node, ast.ExceptHandler):
+                    if "bare_except" in forbidden_patterns:
+                        if node.type is None:
+                            except_hits.append(f"{rel_str}:{getattr(node, 'lineno', '?')} uses forbidden bare except")
+                        elif isinstance(node.type, ast.Name) and node.type.id == "Exception":
+                            if len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
+                                except_hits.append(f"{rel_str}:{getattr(node, 'lineno', '?')} uses forbidden 'except Exception: import sys as _sys; print('Ignored exception', file=_sys.stderr)'")
+
+        self._bare_except_debt = except_hits
+        return ReleaseCheck(
+            "architecture-boundaries",
+            not import_hits,
+            "all imports comply with architecture.toml" if not import_hits else "boundary violations [CR-GATES]: " + "; ".join(import_hits[:20]),
+        )
+
+    def _check_bare_except_debt(self) -> ReleaseCheck:
+        # New violations should be caught in code review; whole-tree enforcement
+        # at error severity would hard-block release-check on pre-existing debt
+        # never audited for behavioral intent. Reported as debt, not a gate.
+        hits = getattr(self, "_bare_except_debt", [])
+        return ReleaseCheck(
+            "bare-except-debt",
+            not hits,
+            "no bare except found" if not hits else f"{len(hits)} pre-existing bare-except site(s) [CR-STYLE]: " + "; ".join(hits[:20]),
+            severity="warning",
+        )
+
 
     def _check_public_private_files(self) -> ReleaseCheck:
         private_files = [

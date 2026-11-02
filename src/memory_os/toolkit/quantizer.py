@@ -89,6 +89,40 @@ def calculate_level(
     return legacy_score_to_level(calculate_score(task_desc, risk, volume, uncertainty))
 
 
+EFFORT_RULES = {
+    "low": (
+        "Fast lane: act directly, no exploration beyond named files, minimal deliberation. "
+        "Tests: only the touched test file (pytest tests/test_<module>.py -q); no code changed = no tests."
+    ),
+    "medium": (
+        "Standard: scoped exploration. "
+        "Tests: targeted files during iteration, full suite once before STATUS_REPORT."
+    ),
+    "high": (
+        "Deep: full analysis, compare alternatives. "
+        "Tests: full suite before STATUS_REPORT."
+    ),
+}
+
+
+def effort_for_level(level: int) -> str:
+    if level <= 4:
+        return "low"
+    if level <= 8:
+        return "medium"
+    return "high"
+
+
+def effort_directive(task_desc: str, effort: str = "") -> str:
+    """One-line [EFFORT ...] header prepended to dispatched task messages.
+
+    Agents obey its scope/test rules (see agent_context/agents/prompts/*).
+    Explicit effort overrides the quantizer-derived tier."""
+    level = calculate_level(task_desc)
+    tier = effort if effort in EFFORT_RULES else effort_for_level(level)
+    return f"[EFFORT {tier} L{level}] {EFFORT_RULES[tier]}"
+
+
 def _workflow_for_level(level: int, task_desc: str = "") -> str:
     if level == 0:
         return "deterministic.l0"
@@ -107,7 +141,11 @@ def _model_policy_for_level(level: int) -> str:
     if level <= 4:
         return "cheap_free"
     if level <= 8:
-        return "codex"
+        try:
+            from memory_os.core.config import MemoryOSConfig
+            return MemoryOSConfig().data.get("default_agent", "codex")
+        except Exception:
+            return "codex"
     if level <= 11:
         return "strong_cloud"
     return "large_reasoning"

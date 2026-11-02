@@ -11,6 +11,7 @@ import yaml
 import re
 
 from memory_os.core.interfaces import ILlmProviderService
+from memory_os.core.llm_json import strip_json_code_fence
 from memory_os.core.llm_service import DefaultLlmProviderService
 
 PERSONA_PROMPT = """
@@ -51,8 +52,9 @@ class PersonaManager:
                         # Strip code blocks to save LLM context
                         content = re.sub(r'```.*?```', '[CODE_REMOVED]', content, flags=re.DOTALL)
                         dialogue.append(f"{role}: {content[:2000]}")
-                except Exception:
-                    pass
+                except Exception as _e:
+                    import sys as _sys
+                    print(f'Ignored exception: {_e}', file=_sys.stderr)
         
         if not dialogue:
             return False
@@ -67,13 +69,7 @@ class PersonaManager:
                 model=model
             )
             
-            # Clean up markdown block if present
-            if raw_response.startswith("```json"):
-                raw_response = raw_response[7:-3].strip()
-            elif raw_response.startswith("```"):
-                raw_response = raw_response[3:-3].strip()
-                
-            result = json.loads(raw_response)
+            result = json.loads(strip_json_code_fence(raw_response))
                 
             self.storage_dir.mkdir(parents=True, exist_ok=True)
             with open(self.persona_file, "w", encoding="utf-8") as f:

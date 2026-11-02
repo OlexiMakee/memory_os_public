@@ -3,7 +3,7 @@ import json
 import urllib.request
 import urllib.error
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Tuple
 from memory_os.core.logger import get_logger
 from memory_os.modules.validator import MemoryValidator
@@ -13,6 +13,7 @@ from memory_os.toolkit.base_extractor import DataExtractor, DocumentIngestor
 logger = get_logger(__name__)
 
 GDRIVE_API_URL = "https://www.googleapis.com/drive/v3"
+UTC = timezone.utc
 
 def query_gdrive_files(access_token: str, folder_id: str, page_token: str = None) -> dict:
     query = f"'{folder_id}' in parents and trashed = false"
@@ -51,17 +52,21 @@ def download_gdrive_file_content(access_token: str, file_id: str, mime_type: str
         params = {"alt": "media"}
         url = f"{GDRIVE_API_URL}/files/{file_id}?{urllib.parse.urlencode(params)}"
         
+    _MAX_BYTES = 10 * 1024 * 1024  # 10 MB hard cap regardless of Content-Length
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
             content_length = response.headers.get("Content-Length")
             if content_length:
                 try:
-                    if int(content_length) > 10 * 1024 * 1024:
+                    if int(content_length) > _MAX_BYTES:
                         return "[File size exceeds sync limit]"
                 except ValueError:
                     pass
-            content_bytes = response.read()
+            # Read at most _MAX_BYTES+1 to detect oversized chunked responses.
+            content_bytes = response.read(_MAX_BYTES + 1)
+            if len(content_bytes) > _MAX_BYTES:
+                return "[File size exceeds sync limit]"
             try:
                 return content_bytes.decode("utf-8")
             except UnicodeDecodeError:
@@ -120,7 +125,7 @@ class GDriveExtractor(DataExtractor):
             file_id = file_info.get("id")
             mime_type = file_info.get("mimeType", "text/plain")
             modified_time = file_info.get("modifiedTime", "")
-            freshness = modified_time[:19] + "Z" if modified_time else datetime.utcnow().isoformat()[:19] + "Z"
+            freshness = modified_time[:19] + "Z" if modified_time else datetime.now(UTC).isoformat()[:19] + "Z"
             url = file_info.get("webViewLink", "")
             
             logger.info(f"[{idx}/{len(files)}] Processing file: {file_name}")
@@ -163,7 +168,7 @@ class GDriveExtractor(DataExtractor):
             
             mime_type = file_info.get("mimeType", "text/plain")
             modified_time = file_info.get("modifiedTime", "")
-            freshness = modified_time[:19] if modified_time else datetime.utcnow().isoformat()[:19]
+            freshness = modified_time[:19] if modified_time else datetime.now(UTC).isoformat()[:19]
             url = file_info.get("webViewLink", "")
             
             logger.info(f"[{idx}/{len(files)}] Processing file: {file_name}")

@@ -345,8 +345,9 @@ class GiantScanRunner:
                             existing_ids.add(row.get("id", ""))
                         except json.JSONDecodeError:
                             pass
-            except Exception:
-                pass
+            except Exception as _e:
+                import sys as _sys
+                print(f'Ignored exception: {_e}', file=_sys.stderr)
 
         created = 0
         with open(self.proposals_path, "a", encoding="utf-8") as f:
@@ -386,7 +387,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Giant Scan: Full-context audit for Memory OS.")
     parser.add_argument("--root", default=str(Path(__file__).resolve().parents[2]),
                         help="Project root directory.")
-    parser.add_argument("--provider", default="gemini", help="LLM provider (gemini, openrouter, openai).")
+    parser.add_argument("--provider", default="gemini", help="LLM provider (ollama, gemini, groq, openrouter, openai). Defaults to gemini for its large context window.")
     parser.add_argument("--model", default="gemini-2.5-pro", help="LLM model ID.")
     parser.add_argument("--force", action="store_true", help="Allow scanning repos >500K chars.")
     parser.add_argument("--dry-run", action="store_true", help="Collect stats without calling LLM.")

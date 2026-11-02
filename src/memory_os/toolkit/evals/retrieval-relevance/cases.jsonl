@@ -1,3 +1,22 @@
 {"id": "retrieves-task-queue", "query": "TaskQueue", "expected_node_id_substring": "TaskQueue"}
 {"id": "retrieves-config-class", "query": "MemoryOSConfig", "expected_node_id_substring": "MemoryOSConfig"}
 {"id": "retrieves-search-module", "query": "search.py", "expected_node_id_substring": "search.py"}
+{"id": "retrieves-memory-graph-schema", "query": "nodes jsonl edges jsonl graph schema", "expected_node_id_substring": "arch:memory-graph-schema"}
+{"id": "retrieves-agent-registry", "query": "tmux_target risk_max system_prompt_file agent registry", "expected_node_id_substring": "arch:agent-registry"}
+{"id": "retrieves-task-lifecycle", "query": "done blocked inbox STATUS_REPORT task lifecycle", "expected_node_id_substring": "arch:task-lifecycle"}
+{"id": "retrieves-open-items", "query": "recall at five retrieval eval open items", "expected_node_id_substring": "strategy:open-items-20260701"}
+{"id": "retrieves-collaboration-protocol", "query": "implementation tests knowledge curation swarm coordination tmux audit", "expected_node_id_substring": "strategy:collab-agy-codex"}
+{"id": "retrieves-strategy-roadmap", "query": "graph write path integrity confidence eval gates patch backed writes", "expected_node_id_substring": "strategy:consensus-2026-2027"}
+{"id": "retrieves-swarm-testing", "query": "tmux live pane driver deterministic fake agent e2e release gate", "expected_node_id_substring": "strategy:swarm-testing-architecture"}
+{"id": "retrieves-core-layout", "query": "repository patch relation patch store search lifecycle validator", "expected_node_id_substring": "arch:memory-os-core-layout"}
+{"id": "retrieves-memory-maintenance", "query": "memory maintenance graph write path confidence eval gates roadmap", "expected_node_id_substring": "strategy:consensus-2026-2027"}
+{"id": "retrieves-swarm-protocol", "query": "agent_comm inbox jsonl fallback STATUS_REPORT send keys pane delivery", "expected_node_id_substring": "arch:swarm-protocol"}
+{"id": "retrieves-daemon-ipc-roadmap", "query": "daemon IPC contract graph write path confidence eval gates local action brain lora runtime", "expected_node_id_substring": "strategy:consensus-2026-2027"}
+{"id": "retrieves-jsonl-sqlite-index", "query": "SQLite FTS5 derived index sync JSONL source of truth graph_nodes", "expected_node_id_substring": "arch:memory-graph-schema"}
+{"id": "retrieves-agent-context-task-events", "query": "task_events jsonl feed watch inbox done signal task survives restart", "expected_node_id_substring": "arch:task-lifecycle"}
+{"id": "retrieves-agent-capability-registry", "query": "cost_class context_window risk_max capabilities system prompt file local router qwen3", "expected_node_id_substring": "arch:agent-registry"}
+{"id": "retrieves-core-toolkit-modules", "query": "toolkit dispatcher link_inferrer graph_mapper compactor lifecycle repository patch", "expected_node_id_substring": "arch:memory-os-core-layout"}
+{"id": "retrieves-codex-agy-roles", "query": "codex implementation agy architecture review knowledge curation collaboration protocol", "expected_node_id_substring": "strategy:collab-agy-codex"}
+{"id": "retrieves-release-gate-testing", "query": "deterministic fake agent e2e suite release gate live tmux smoke tests", "expected_node_id_substring": "strategy:swarm-testing-architecture"}
+{"id": "retrieves-memory-architecture-any", "query": "memory architecture graph schema source layout modules repository edges", "expected_any": ["arch:memory-graph-schema", "arch:memory-os-core-layout"]}
+{"id": "negative-schema-not-collab", "query": "nodes edges freshness evidence trust status graph schema", "expected_node_id_substring": "arch:memory-graph-schema", "expect_absent_substring": "strategy:collab-agy-codex"}

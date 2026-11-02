@@ -66,8 +66,9 @@ class DefaultGraphDataProvider(IGraphDataProvider):
                 if file_path:
                     try:
                         node_dict["file_size"] = file_path.stat().st_size
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        import sys as _sys
+                        print(f'Ignored exception: {_e}', file=_sys.stderr)
 
             formatted_nodes.append(node_dict)
 
@@ -119,7 +120,7 @@ class DefaultGraphDataProvider(IGraphDataProvider):
 
         if not found:
             return None
-        return found[0]
+        return sorted(found)[0]
 
     def read_evidence_file(self, file_path: str) -> Optional[bytes]:
         """

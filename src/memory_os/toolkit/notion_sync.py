@@ -5,18 +5,18 @@ import urllib.request
 import urllib.error
 import urllib.parse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from memory_os.core.logger import get_logger
 from memory_os.core.models import MemoryNode
 from memory_os.modules.validator import MemoryValidator
 from memory_os import MemoryOSConfig
 from memory_os.toolkit.base_extractor import DataExtractor, DocumentIngestor
 from typing import Tuple, Dict, Any, List
-from datetime import datetime
 
 logger = get_logger(__name__)
 
 NOTION_API_URL = "https://api.notion.com/v1"
+UTC = timezone.utc
 
 def get_property_value(page: dict, property_name: str):
     properties = page.get("properties", {})
@@ -312,7 +312,7 @@ class NotionExtractor(DataExtractor):
             page_content = fetch_page_content(self.api_key, page_id)
             url = page.get("url", "")
             modified_time = page.get("last_edited_time", "")
-            freshness = modified_time[:19] + "Z" if modified_time else datetime.utcnow().isoformat()[:19] + "Z"
+            freshness = modified_time[:19] + "Z" if modified_time else datetime.now(UTC).isoformat()[:19] + "Z"
             
             resolution = f"Notion Import: Page ID={page_id}"
             
@@ -358,7 +358,7 @@ class NotionExtractor(DataExtractor):
             
             url = page.get("url", "")
             modified_time = page.get("last_edited_time", "")
-            freshness = modified_time[:19] if modified_time else datetime.utcnow().isoformat()[:19]
+            freshness = modified_time[:19] if modified_time else datetime.now(UTC).isoformat()[:19]
             
             node_id = f"notion.{page_id.replace('-', '')}"
             

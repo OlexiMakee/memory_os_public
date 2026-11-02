@@ -84,9 +84,9 @@ class SecurityScanner:
                     for line_idx, line in enumerate(f, 1):
                         line_findings = self._scan_line(line, rel_path, line_idx)
                         findings.extend(line_findings)
-            except Exception:
-                # Skip gracefully if reading file fails
-                pass
+            except Exception as _e:
+                import sys as _sys
+                print(f'Ignored exception: {_e}', file=_sys.stderr)
 
         # Deduplicate findings on the same line to avoid multiple identical entries
         # but keep unique categories/patterns
@@ -183,8 +183,9 @@ class SecurityScanner:
             # but try to parse as JSON first
             obj = json.loads(line.strip().rstrip(","))
             is_json = True
-        except Exception:
-            pass
+        except Exception as _e:
+            import sys as _sys
+            print(f'Ignored exception: {_e}', file=_sys.stderr)
 
         # 1. Check for .env file reference in payload path or any path fields
         if is_json and isinstance(obj, dict):

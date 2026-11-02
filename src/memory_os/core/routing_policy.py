@@ -31,6 +31,11 @@ PROVIDER_REGISTRY: Dict[str, Dict] = {
         ),
         "env_key": "GEMINI_API_KEY",
     },
+    "groq": {
+        # Called via plain urllib (OpenAI-compatible REST), no SDK required.
+        "adapter_installed": True,
+        "env_key": "GROQ_API_KEY",
+    },
     "openrouter": {
         "adapter_installed": _adapter_installed("openai"),
         "env_key": "OPENROUTER_API_KEY",

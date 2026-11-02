@@ -1,0 +1,121 @@
+# Memory OS Agent Registry
+# Controls which agents are available for task dispatch.
+# Audit: memory_os agent-registry audit
+# List:  memory_os agent-registry list
+
+# ------------------------------------------------------------------ #
+# Big agents — broad architecture, complex code edits, deep review    #
+# ------------------------------------------------------------------ #
+
+[agent.claude]
+kind = "cli_agent"
+display_name = "Клод"
+command = ["claude"]
+dispatch_flags = ["--dangerously-skip-permissions"]
+launch_flags = ["--dangerously-skip-permissions"]
+capabilities = ["repo_analysis", "code_edit", "tests", "review", "architecture", "deep_context"]
+cost_class = "limited"
+context_window = "large"
+risk_max = "high"
+supports_streaming = true
+supports_tools = true
+tmux_target = "memory_os_workspace:0.0"
+system_prompt_file = "agent_context/agents/prompts/claude.md"
+
+[agent.codex]
+kind = "cli_agent"
+display_name = "Кодекс"
+command = ["codex", "exec"]
+capabilities = ["repo_analysis", "code_edit", "tests", "review"]
+cost_class = "limited"
+context_window = "large"
+risk_max = "high"
+supports_streaming = true
+supports_tools = true
+dispatch_flags = ["--sandbox", "danger-full-access", "--ask-for-approval", "never"]
+launch_flags = ["--sandbox", "danger-full-access", "--ask-for-approval", "never"]
+tmux_target = "memory_os_workspace:0.1"
+system_prompt_file = "agent_context/agents/prompts/codex.md"
+
+[agent.agy]
+kind = "cli_agent"
+display_name = "Antigravity"
+command = ["agy"]
+capabilities = ["repo_analysis", "code_edit", "review", "chat", "teamwork_orchestration"]
+cost_class = "limited"
+context_window = "medium"
+risk_max = "high"
+supports_streaming = false
+supports_tools = false
+dispatch_flags = ["--dangerously-skip-permissions"]
+launch_flags = ["--dangerously-skip-permissions"]
+teamwork_command = "/teamwork"
+teamwork_preview_command = "/teamwork-preview"
+teamwork_agents_dir = ".agents/"
+# /teamwork spawns: orchestrator + sentinel + explorer×N + worker×N (max 16 total)
+tmux_target = "memory_os_workspace:0.2"
+system_prompt_file = "agent_context/agents/prompts/agy.md"
+
+[agent.local]
+kind = "cli_agent"
+command = ["python3", "-m", "memory_os.toolkit.local_agent"]
+capabilities = ["run_tests", "git", "file_ops", "memory.search", "chat"]
+cost_class = "cheap"
+context_window = "small"
+risk_max = "medium"
+supports_streaming = true
+supports_tools = true
+tmux_target = "memory_os_workspace:0.3"
+system_prompt_file = "agent_context/agents/prompts/local.md"
+
+
+# ------------------------------------------------------------------ #
+# Local models — classification, short command intents, summaries     #
+# ------------------------------------------------------------------ #
+
+[agent.local-router]
+kind = "local_model"
+command = ["ollama", "run", "qwen3:4b"]
+capabilities = ["classify", "tool_intent", "summarize_output", "action_routing"]
+cost_class = "cheap"
+context_window = "small"
+risk_max = "low"
+supports_streaming = false
+supports_tools = false
+system_prompt_file = "agent_context/agents/prompts/local-router.md"
+
+[agent.local-responder]
+kind = "local_model"
+command = ["ollama", "run", "qwen3:4b"]
+capabilities = ["respond", "summarize", "ukrainian_response"]
+cost_class = "cheap"
+context_window = "small"
+risk_max = "low"
+supports_streaming = false
+supports_tools = false
+system_prompt_file = "agent_context/agents/prompts/local-responder.md"
+
+
+# ------------------------------------------------------------------ #
+# Deterministic scripts — repeatable checks, indexing, transforms     #
+# ------------------------------------------------------------------ #
+
+[agent.memory-os-cli]
+kind = "script"
+command = ["python3", "-m", "memory_os"]
+capabilities = ["memory.search", "memory.write", "eval.run", "lora.dataset", "audit", "snapshot"]
+cost_class = "zero"
+context_window = "none"
+risk_max = "medium"
+supports_streaming = false
+supports_tools = false
+
+[agent.shell]
+kind = "shell"
+command = ["bash"]
+capabilities = ["run_tests", "lint", "git", "file_ops"]
+cost_class = "zero"
+context_window = "none"
+risk_max = "medium"
+supports_streaming = false
+supports_tools = false

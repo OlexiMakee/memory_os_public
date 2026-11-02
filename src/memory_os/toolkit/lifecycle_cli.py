@@ -3,7 +3,7 @@ import sys
 import os
 import argparse
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parents[2]
 MEMORY_DIR = ROOT / "memory"
@@ -12,24 +12,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from memory_os import MemoryOSConfig, LifecycleManager
-
-def load_jsonl(path: Path) -> List[Dict[str, Any]]:
-    config = MemoryOSConfig()
-    config.root_dir = ROOT
-    lm = LifecycleManager(config)
-    return lm._load_jsonl(Path(path))
-
-def append_jsonl(path: Path, item: Dict[str, Any]) -> None:
-    config = MemoryOSConfig()
-    config.root_dir = ROOT
-    lm = LifecycleManager(config)
-    lm._append_jsonl(Path(path), item)
-
-def write_jsonl(path: Path, items: List[Dict[str, Any]]) -> None:
-    config = MemoryOSConfig()
-    config.root_dir = ROOT
-    lm = LifecycleManager(config)
-    lm._write_jsonl(Path(path), items)
 
 def cmd_propose(args: argparse.Namespace) -> int:
     config = MemoryOSConfig()

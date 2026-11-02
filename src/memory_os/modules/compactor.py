@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import List, Dict, Set, Any, Optional
 
 from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor
-
 from memory_os.core.interfaces import IMemoryOSConfig, IMemoryStorage, ILlmProviderService
 from memory_os.core.repository import MemoryRepository
 from memory_os.core.models import MemoryNode, MemoryEdge, NodeType, EdgeType
@@ -16,9 +14,11 @@ from memory_os.core.exceptions import MemoryOSError, ValidationError
 from memory_os.core.config import MemoryOSConfig
 from memory_os.core.storage import FileSystemMemoryStorage
 from memory_os.core.llm_service import DefaultLlmProviderService
+from memory_os.core.llm_json import strip_json_code_fence
 from memory_os.core.scheduler import HardwareScheduler
+from memory_os.core.timecode import now_local_iso
+from memory_os.modules.lifecycle import PROMOTABLE_NODE_TYPES
 from memory_os.modules.validator import EvolutionGate, VALID_EDGE_TYPES
-from memory_os.modules.exporter import PolyglotExporter
 
 SYSTEM_PROMPT = """You are the Memory OS Knowledge Compactor.
 Your job is to analyze developer task logs (task capsules) and existing memory nodes, then extract new permanent knowledge nodes (rules, facts, configurations, or policies) and relationships (edges).
@@ -131,18 +131,8 @@ class MemoryCompactor:
     def _load_jsonl(self, path: Path) -> List[Dict[str, Any]]:
         return self.storage.load_jsonl(path)
 
-    def _append_jsonl(self, path: Path, item: Dict[str, Any]) -> None:
-        self.storage.append_jsonl(path, item)
-
-    def _clean_llm_json(self, text: str) -> str:
-        text = text.strip()
-        if text.startswith("```"):
-            first_nl = text.find("\n")
-            if first_nl != -1:
-                text = text[first_nl:].strip()
-            if text.endswith("```"):
-                text = text[:-3].strip()
-        return text
+    def _emit_event(self, event: Dict[str, Any]) -> None:
+        self.repository.emit_event(event)
 
     def _call_llm(self, user_message: str, provider_override: Optional[str] = None, model_override: Optional[str] = None) -> str:
         return self.llm_service.call_llm(user_message, SYSTEM_PROMPT, provider_override, model_override)
@@ -157,7 +147,7 @@ class MemoryCompactor:
         user_msg = json.dumps({"nodes_to_review": slim}, ensure_ascii=False)
         try:
             raw = self.llm_service.call_llm(user_msg, CRITIC_PROMPT, provider, model)
-            verdicts = json.loads(self._clean_llm_json(raw))
+            verdicts = json.loads(strip_json_code_fence(raw))
             if isinstance(verdicts, dict):
                 verdicts = [verdicts]
             return [v for v in verdicts if isinstance(v, dict) and "node_id" in v and "verdict" in v]
@@ -171,15 +161,19 @@ class MemoryCompactor:
             return [], []
         approval: Dict[str, int] = {n["id"]: 0 for n in proposed_nodes}
         all_votes: List[Dict[str, Any]] = []
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            futures = [pool.submit(self._run_critic, i, proposed_nodes, provider, model) for i in range(3)]
-            for critic_idx, f in enumerate(futures):
-                for vote in f.result():
-                    nid = vote.get("node_id", "")
-                    vote["critic_index"] = critic_idx
-                    all_votes.append(vote)
-                    if nid in approval and vote.get("verdict") == "approve":
-                        approval[nid] += 1
+        scheduler = HardwareScheduler(mode=getattr(self.config, "resource_mode", "normal"))
+        critic_results = scheduler.execute_parallel(
+            lambda critic_idx: self._run_critic(critic_idx, proposed_nodes, provider, model),
+            [0, 1, 2],
+            max_workers=min(3, scheduler.max_workers),
+        )
+        for critic_idx, votes in enumerate(critic_results):
+            for vote in votes:
+                nid = vote.get("node_id", "")
+                vote["critic_index"] = critic_idx
+                all_votes.append(vote)
+                if nid in approval and vote.get("verdict") == "approve":
+                    approval[nid] += 1
         surviving = [n for n in proposed_nodes if approval.get(n["id"], 0) >= 2]
         rejected_ids = {n["id"] for n in proposed_nodes} - {n["id"] for n in surviving}
         if rejected_ids:
@@ -189,8 +183,6 @@ class MemoryCompactor:
     def _record_planned_deprecations(self, validator_name: str) -> None:
         nodes_path = self.config.memory_dir / "nodes.jsonl"
         edges_path = self.config.memory_dir / "edges.jsonl"
-        events_path = self.config.memory_dir / "events.jsonl"
-
         if not self.storage.exists(nodes_path) or not self.storage.exists(edges_path):
             return
 
@@ -206,7 +198,7 @@ class MemoryCompactor:
         for node in nodes:
             if node.get("status") in ["draft", "observed"]:
                 if (node.get("id") and node.get("summary") and
-                    node.get("type") in ["rule", "fact", "variable", "connector", "config", "policy", "module_cluster"] and
+                    node.get("type") in PROMOTABLE_NODE_TYPES and
                     lifecycle._validate_evidence(node.get("evidence", []))):
                     verified_ids.add(node["id"])
 
@@ -220,9 +212,11 @@ class MemoryCompactor:
                 if source_id in all_verified_ids:
                     for n in nodes:
                         if n.get("id") == target_id and n.get("status") not in ["stale", "superseded"]:
+                            if "pinned" in {str(tag) for tag in n.get("tags", [])}:
+                                continue
                             new_status = "superseded" if edge["type"] == "overrides" else "stale"
                             dep_event = {
-                                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                                "timestamp": now_local_iso(self.config),
                                 "event": "memory.node.deprecation_planned",
                                 "node_id": target_id,
                                 "claim": f"Planned deprecation to {new_status} via edge {edge['type']} from {source_id} (recorded by compactor)",
@@ -230,7 +224,7 @@ class MemoryCompactor:
                                 "validator": validator_name,
                                 "status": "accepted"
                             }
-                            self._append_jsonl(events_path, dep_event)
+                            self._emit_event(dep_event)
                             logger.info(f"Audit log: Node '{target_id}' is planned for deprecation to '{new_status}' due to edge '{edge['type']}' from '{source_id}'.")
 
     def _process_single_batch(self, args: tuple) -> Dict[str, Any]:
@@ -260,7 +254,7 @@ class MemoryCompactor:
         except Exception as exc:
             return {"batch_num": batch_num, "error": str(exc), "proposed_nodes": [], "proposed_edges": [], "timestamps": [], "critic_votes": []}
 
-        json_text = self._clean_llm_json(response_text)
+        json_text = strip_json_code_fence(response_text)
         try:
             payload = json.loads(json_text)
         except json.JSONDecodeError as exc:
@@ -493,14 +487,12 @@ class MemoryCompactor:
 
         # --- Atomic write: flush all buffers to disk ---
         for node in nodes_buffer:
-            self._append_jsonl(nodes_path, node)
-            exporter = PolyglotExporter(self.config.root_dir)
-            exporter.export_node(node["id"], node["type"], node["summary"], node["evidence"], None)
+            self.repository.upsert_node(node)
         for edge in edges_buffer:
-            self._append_jsonl(edges_path, edge)
+            self.repository.upsert_edge_with_protocol(edge, protocol_level=8)
             logger.info(f"Appended edge: {edge['source']} -> {edge['target']} ({edge['type']})")
         for event in events_buffer:
-            self._append_jsonl(events_path, event)
+            self._emit_event(event)
 
         logger.info(f"Compaction completed. Proposed {len(nodes_buffer)} nodes, appended {len(edges_buffer)} edges.")
 
@@ -541,14 +533,12 @@ class MemoryCompactor:
     def compress_graph(self, provider: Optional[str] = None, model: Optional[str] = None, dry_run: bool = False) -> int:
         nodes_path = self.config.memory_dir / "nodes.jsonl"
         edges_path = self.config.memory_dir / "edges.jsonl"
-        events_path = self.config.memory_dir / "events.jsonl"
-
         if not self.storage.exists(nodes_path):
             logger.error(f"Error: nodes.jsonl not found at {nodes_path}")
             return 1
 
         nodes = [n.to_dict() for n in self.repository.get_nodes()]
-        verified_nodes = [n for n in nodes if n["status"] == "verified"]
+        verified_nodes = [n for n in nodes if n["status"] == "verified" and "pinned" not in {str(tag).lower() for tag in n.get("tags", [])}]
 
         if len(verified_nodes) < 2:
             logger.info("Not enough verified nodes to compress.")
@@ -567,7 +557,7 @@ class MemoryCompactor:
             logger.error(f"Error during LLM compression call: {exc}")
             return 1
 
-        json_text = self._clean_llm_json(response_text)
+        json_text = strip_json_code_fence(response_text)
         try:
             payload = json.loads(json_text)
         except json.JSONDecodeError as exc:
@@ -625,7 +615,7 @@ class MemoryCompactor:
 
         for verdict in gate_report.rejected:
             rejected_id = verdict.node.get("id", "unknown")
-            self._append_jsonl(events_path, {
+            self._emit_event({
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "event": "memory.node.rejected",
                 "node_id": rejected_id,
@@ -639,7 +629,7 @@ class MemoryCompactor:
 
         # Log critic votes to events
         for vote in critic_votes:
-            self._append_jsonl(events_path, {
+            self._emit_event({
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "event": "memory.critic.vote",
                 "node_id": vote.get("node_id", "unknown"),
@@ -675,15 +665,12 @@ class MemoryCompactor:
                 "related_nodes": [],
                 "tags": node.get("tags", []),
             }
-            self._append_jsonl(nodes_path, new_node)
+            self.repository.upsert_node(new_node)
             new_node_ids.add(node_id)
             node_append_count += 1
             logger.info(f"Proposed compressed node '{node_id}' added as draft.")
 
-            exporter = PolyglotExporter(self.config.root_dir)
-            exporter.export_node(node_id, new_node["type"], new_node["summary"], new_node["evidence"], node.get("globs"))
-
-            self._append_jsonl(events_path, {
+            self._emit_event({
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "event": "memory.node.proposed",
                 "node_id": node_id,
@@ -700,7 +687,7 @@ class MemoryCompactor:
 
             if edge_type != "overrides":
                 logger.warning(f"Rejecting edge {source} --{edge_type}--> {target} because type is not 'overrides' in compress_graph.")
-                self._append_jsonl(events_path, {
+                self._emit_event({
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "event": "memory.edge.rejected",
                     "node_id": source or "unknown",
@@ -714,7 +701,7 @@ class MemoryCompactor:
 
             if edge_type not in VALID_EDGE_TYPES:
                 logger.warning(f"Rejecting edge {source} --{edge_type}--> {target} because type is not in VALID_EDGE_TYPES.")
-                self._append_jsonl(events_path, {
+                self._emit_event({
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "event": "memory.edge.rejected",
                     "node_id": source or "unknown",
@@ -728,7 +715,7 @@ class MemoryCompactor:
 
             if source not in new_node_ids:
                 logger.warning(f"Rejecting edge {source} --{edge_type}--> {target} because source was not accepted in this compression run.")
-                self._append_jsonl(events_path, {
+                self._emit_event({
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "event": "memory.edge.rejected",
                     "node_id": source,
@@ -742,7 +729,7 @@ class MemoryCompactor:
 
             if target not in existing_node_ids:
                 logger.warning(f"Rejecting edge {source} --{edge_type}--> {target} because target is not in existing_node_ids.")
-                self._append_jsonl(events_path, {
+                self._emit_event({
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "event": "memory.edge.rejected",
                     "node_id": source,
@@ -759,7 +746,7 @@ class MemoryCompactor:
                 logger.info(f"Skipping duplicate edge: {key[0]} --{key[2]}--> {key[1]}")
                 continue
 
-            self._append_jsonl(edges_path, edge)
+            self.repository.upsert_edge_with_protocol(edge, protocol_level=8)
             existing_edge_keys.add(key)
             edge_append_count += 1
             logger.info(f"Appended compression edge: {source} -> {target} ({edge_type})")

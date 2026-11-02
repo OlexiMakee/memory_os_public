@@ -1,5 +1,5 @@
 from typing import List, Any, Optional, Dict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import multiprocessing
 from memory_os.core.interfaces import IHardwareScheduler
@@ -10,15 +10,16 @@ class HardwareScheduler(IHardwareScheduler):
     def __init__(self, mode: str = "normal"):
         self.mode = mode
         self._cache: Dict[str, Dict[str, Any]] = {}
-        
-        # Determine concurrency based on mode
-        cpu_count = multiprocessing.cpu_count()
+        self.max_workers = self.cpu_worker_limit(mode)
+
+    @staticmethod
+    def cpu_worker_limit(mode: str = "normal") -> int:
+        cpu_count = multiprocessing.cpu_count() or 1
+        if mode == "quiet":
+            return 1
         if mode == "max":
-            self.max_workers = cpu_count
-        elif mode == "quiet":
-            self.max_workers = max(1, cpu_count // 4)
-        else:
-            self.max_workers = max(1, cpu_count // 2)
+            return cpu_count
+        return max(1, cpu_count // 2)
 
     def execute_parallel(self, func: Any, items: List[Any], max_workers: Optional[int] = None) -> List[Any]:
         """Execute a function in parallel across items. Uses ThreadPool for I/O bounds by default.

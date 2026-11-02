@@ -58,6 +58,52 @@ function buildNodeTypeToggles() {
 }
 
 let Graph;
+let graphMode = localStorage.getItem('mos_graph_mode') === '2d' ? '2d' : '3d';
+
+function graphLibAvailable(mode) {
+  return mode === '2d' ? typeof ForceGraph !== 'undefined' : typeof ForceGraph3D !== 'undefined';
+}
+
+function updateModeButtons() {
+  const active = { background: 'rgba(99,102,241,0.35)', color: '#c7d2fe' };
+  const idle = { background: 'transparent', color: 'var(--text-muted)' };
+  const btn2d = document.getElementById('btn-mode-2d');
+  const btn3d = document.getElementById('btn-mode-3d');
+  if (!btn2d || !btn3d) return;
+  Object.assign(btn2d.style, graphMode === '2d' ? active : idle);
+  Object.assign(btn3d.style, graphMode === '3d' ? active : idle);
+}
+
+function switchGraphMode(mode) {
+  if (mode === graphMode) return;
+  if (!graphLibAvailable(mode)) {
+    alert(`${mode.toUpperCase()} graph library failed to load. Check network connection.`);
+    return;
+  }
+  graphMode = mode;
+  localStorage.setItem('mos_graph_mode', mode);
+  updateModeButtons();
+  initApp();
+}
+
+// Camera/viewport helpers papering over the 3D (cameraPosition) vs 2D (centerAt/zoom) API split
+function focusViewOn(node) {
+  if (!Graph) return;
+  if (graphMode === '2d') {
+    Graph.centerAt(node.x, node.y, 800);
+  } else {
+    Graph.cameraPosition(Graph.cameraPosition(), node, 1800);
+  }
+}
+
+function resetView() {
+  if (!Graph) return;
+  if (graphMode === '2d') {
+    Graph.zoomToFit(800, 60);
+  } else {
+    Graph.cameraPosition(Graph.cameraPosition(), {x: 0, y: 0, z: 0}, 1800);
+  }
+}
 
 // Color definitions
 const colors = {
@@ -180,12 +226,21 @@ window.initiateMerge = function() {
 };
 
 async function initApp() {
-  if (typeof ForceGraph3D === 'undefined') {
-    document.getElementById('3d-graph').innerHTML =
-      '<div style="color:#f87171;padding:40px;font-family:monospace;font-size:14px;">' +
-      '⚠ 3D graph library failed to load. Check network connection.</div>';
-    return;
+  if (!graphLibAvailable(graphMode)) {
+    if (graphMode === '2d' && graphLibAvailable('3d')) {
+      graphMode = '3d';
+      localStorage.setItem('mos_graph_mode', '3d');
+    } else if (graphMode === '3d' && graphLibAvailable('2d')) {
+      graphMode = '2d';
+      localStorage.setItem('mos_graph_mode', '2d');
+    } else {
+      document.getElementById('3d-graph').innerHTML =
+        '<div style="color:#f87171;padding:40px;font-family:monospace;font-size:14px;">' +
+        '⚠ Graph libraries failed to load. Check network connection.</div>';
+      return;
+    }
   }
+  updateModeButtons();
   try {
     const res = await fetch('/api/graph');
     if (!res.ok) throw new Error('Failed to fetch graph data: ' + res.status);
@@ -234,8 +289,18 @@ async function initApp() {
     if (nodeDegrees[tId] !== undefined) nodeDegrees[tId]++;
   });
 
-  // Initialize the 3D Graph
-  Graph = ForceGraph3D({ controlType: 'trackball' })
+  // Tear down any previous renderer: repeated init (space switch, merge,
+  // mode toggle) must not stack canvases/WebGL contexts in the container
+  if (Graph && typeof Graph._destructor === 'function') {
+    try { Graph._destructor(); } catch (e) {}
+  }
+  document.getElementById('3d-graph').innerHTML = '';
+
+  // Same chained config drives both renderers; only the factory differs
+  const factory = graphMode === '2d'
+    ? ForceGraph()
+    : ForceGraph3D({ controlType: 'trackball' });
+  Graph = factory
     (document.getElementById('3d-graph'))
     .graphData(gData)
     .backgroundColor('#0b0f19')
@@ -368,13 +433,8 @@ function focusOnNode(node) {
   window.focusedNode = node;
   window.lastFocusTime = Date.now();
 
-  // Keep current position, only change lookAt target
-  Graph.cameraPosition(
-    Graph.cameraPosition(),
-    node,
-    1800
-  );
-  
+  focusViewOn(node);
+
   showNodeDetails(node);
 }
 
@@ -524,9 +584,7 @@ function closeDrawer() {
   window.focusedNode = null;
   window.lastFocusTime = Date.now();
   document.getElementById('right-panel').classList.remove('active');
-  if (Graph) {
-    Graph.cameraPosition(Graph.cameraPosition(), {x: 0, y: 0, z: 0}, 1800);
-  }
+  resetView();
 }
 
 // File Viewer Logic
@@ -1133,7 +1191,7 @@ if (document.getElementById('node-res-slider')) {
     const val = parseInt(e.target.value);
     document.getElementById('node-res-val').innerText = val;
     saveSetting('nodeRes', val);
-    if (Graph) { try { Graph.nodeResolution(val); } catch(e){} }
+    if (Graph && typeof Graph.nodeResolution === 'function') { try { Graph.nodeResolution(val); } catch(e){} }
   });
 }
 
@@ -1257,7 +1315,8 @@ if (graphElem) {
 }
 
 setInterval(() => {
-  if (isAutoRotate && Graph) {
+  // Orbit is a 3D-only concept; in 2D the toggle stays inert
+  if (isAutoRotate && Graph && graphMode === '3d') {
     if (window.lastFocusTime && Date.now() - window.lastFocusTime < 1850) return;
     if (window.lastUserInteraction && Date.now() - window.lastUserInteraction < 600) return;
     
@@ -1287,3 +1346,196 @@ setInterval(() => {
     }
   }
 }, 30);
+
+// ── Tasks Panel ──────────────────────────────────────────────────────────────
+
+const TASK_STATUS_COLORS = {
+  pending:  '#f59e0b',
+  claimed:  '#3b82f6',
+  running:  '#10b981',
+  blocked:  '#ef4444',
+  review:   '#8b5cf6',
+  done:     '#64748b',
+};
+
+const TASK_RISK_COLORS = {
+  low:    '#10b981',
+  medium: '#f59e0b',
+  high:   '#ef4444',
+};
+
+function openTasksPanel() {
+  document.getElementById('tasks-overlay').style.display = 'block';
+  fetchTasks();
+}
+
+function closeTasksPanel() {
+  document.getElementById('tasks-overlay').style.display = 'none';
+}
+
+function fetchTasks() {
+  const filter = document.getElementById('task-status-filter');
+  const status = filter ? filter.value : '';
+  const url = '/api/tasks' + (status ? `?status=${encodeURIComponent(status)}` : '');
+  fetch(url)
+    .then(r => r.json())
+    .then(data => renderTasks(data))
+    .catch(err => {
+      const list = document.getElementById('tasks-list');
+      if (list) list.innerHTML = `<div style="color:#ef4444; font-size:12px;">Error: ${err.message}</div>`;
+    });
+}
+
+function renderTasks(data) {
+  const list = document.getElementById('tasks-list');
+  const countEl = document.getElementById('tasks-count');
+  if (!list) return;
+  const tasks = data.tasks || [];
+  if (countEl) countEl.textContent = `${data.total || tasks.length} task(s)`;
+  if (!tasks.length) {
+    list.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:20px; font-size:13px;">No tasks found.</div>';
+    return;
+  }
+  list.innerHTML = tasks.map(t => {
+    const sc = TASK_STATUS_COLORS[t.status] || '#94a3b8';
+    const rc = TASK_RISK_COLORS[t.risk] || '#94a3b8';
+    const updated = t.updated_at ? new Date(t.updated_at).toLocaleString() : '—';
+    const agent = t.agent ? `<span style="color:var(--text-muted); font-size:10px;"><i class="fa-solid fa-robot"></i> ${t.agent}</span>` : '';
+    const blocked = t.blocked_reason ? `<div style="font-size:11px; color:#ef4444; margin-top:4px;"><i class="fa-solid fa-triangle-exclamation"></i> ${t.blocked_reason}</div>` : '';
+    const summary = t.handoff_summary ? `<div style="font-size:11px; color:var(--text-muted); margin-top:4px;">${t.handoff_summary}</div>` : '';
+    const goal = t.goal ? `<div style="font-size:11px; color:var(--text-main); margin-top:4px; font-style:italic;">${t.goal.slice(0, 120)}${t.goal.length > 120 ? '…' : ''}</div>` : '';
+    return `<div style="background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:12px;">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+        <div style="flex:1;">
+          <span style="font-size:13px; font-weight:500; color:var(--text-header);">${t.title}</span>
+          ${goal}
+          ${blocked}
+          ${summary}
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex-shrink:0;">
+          <span style="background:${sc}22; color:${sc}; border:1px solid ${sc}44; border-radius:4px; padding:2px 8px; font-size:10px; font-weight:600; text-transform:uppercase;">${t.status}</span>
+          <span style="background:${rc}22; color:${rc}; border:1px solid ${rc}44; border-radius:4px; padding:2px 8px; font-size:10px;">${t.risk}</span>
+        </div>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:10px; color:var(--text-muted); border-top:1px solid rgba(255,255,255,0.05); padding-top:6px;">
+        <span style="font-family:monospace;">${t.id}</span>
+        <div style="display:flex; gap:12px; align-items:center;">${agent}<span>Updated: ${updated}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Memory Panel ─────────────────────────────────────────────────────────────
+
+function openMemoryPanel() {
+  document.getElementById('memory-overlay').style.display = 'block';
+  fetchMemoryTimeline();
+}
+
+function closeMemoryPanel() {
+  document.getElementById('memory-overlay').style.display = 'none';
+}
+
+function fetchMemoryTimeline() {
+  const type = document.getElementById('memory-type-filter').value;
+  const days = document.getElementById('memory-days-filter').value;
+  const params = new URLSearchParams({ days });
+  if (type) params.set('type', type);
+  fetch('/api/memory/timeline?' + params.toString())
+    .then(r => r.json())
+    .then(data => renderMemoryTimeline(data))
+    .catch(err => {
+      const list = document.getElementById('memory-timeline-list');
+      if (list) list.innerHTML = `<div style="color:#ef4444; font-size:12px;">Error: ${err.message}</div>`;
+    });
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text == null ? '' : String(text);
+  return div.innerHTML;
+}
+
+function renderMemoryTimeline(data) {
+  const list = document.getElementById('memory-timeline-list');
+  const countEl = document.getElementById('memory-count');
+  if (!list) return;
+  const days = data.days || [];
+  const total = days.reduce((acc, d) => acc + (d.nodes || []).length, 0);
+  if (countEl) countEl.textContent = `${total} node(s) across ${days.length} day(s)`;
+  if (!days.length) {
+    list.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:20px; font-size:13px;">No memory activity in this window.</div>';
+    return;
+  }
+  list.innerHTML = days.map(day => {
+    const rows = (day.nodes || []).map(n => {
+      const tc = colors.type[n.type] || colors.type.default;
+      const stc = colors.status[n.status] || colors.status.default;
+      const pinned = (n.tags || []).includes('pinned');
+      const idAttr = escapeHtml(n.id).replace(/'/g, '&#39;');
+      const tags = (n.tags || []).filter(t => t !== 'pinned').slice(0, 6)
+        .map(t => `<span style="background:rgba(255,255,255,0.06); border-radius:3px; padding:1px 5px; font-size:9px; color:var(--text-muted);">${escapeHtml(t)}</span>`).join(' ');
+      return `<div style="background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:10px 12px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+          <div style="flex:1; min-width:0;">
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <span style="background:${tc}22; color:${tc}; border:1px solid ${tc}44; border-radius:4px; padding:1px 6px; font-size:9px; font-weight:600; text-transform:uppercase;">${escapeHtml(n.type)}</span>
+              <span style="color:${stc}; font-size:9px;">${escapeHtml(n.status)}</span>
+              <span onclick="focusMemoryNode('${idAttr}')" style="font-family:monospace; font-size:11px; color:var(--text-header); cursor:pointer; text-decoration:underline dotted;" title="Show in graph">${escapeHtml(n.id)}</span>
+              ${pinned ? '<i class="fa-solid fa-thumbtack" style="color:#f59e0b; font-size:10px;" title="Pinned"></i>' : ''}
+            </div>
+            <div style="font-size:11.5px; color:var(--text-main); margin-top:5px; line-height:1.4;">${escapeHtml(n.summary)}</div>
+            ${tags ? `<div style="margin-top:5px; display:flex; gap:4px; flex-wrap:wrap;">${tags}</div>` : ''}
+          </div>
+          <div style="display:flex; gap:6px; flex-shrink:0;">
+            <button onclick="pinMemoryNode('${idAttr}', ${pinned ? 'false' : 'true'})" style="background:transparent; border:none; color:${pinned ? '#f59e0b' : 'var(--text-muted)'}; cursor:pointer; font-size:11px;" title="${pinned ? 'Unpin' : 'Pin'}"><i class="fa-solid fa-thumbtack"></i></button>
+            <button onclick="editMemoryNode('${idAttr}')" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:11px;" title="Edit summary"><i class="fa-solid fa-pen"></i></button>
+            <button onclick="deleteMemoryNode('${idAttr}')" style="background:transparent; border:none; color:#ef4444; cursor:pointer; font-size:11px;" title="Delete node"><i class="fa-solid fa-trash"></i></button>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+    return `<div>
+      <div style="font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px;">${escapeHtml(day.date)}</div>
+      <div style="display:flex; flex-direction:column; gap:6px;">${rows}</div>
+    </div>`;
+  }).join('');
+}
+
+function _memoryMutate(url, payload, next) {
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(async r => {
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  }).then(() => {
+    fetchMemoryTimeline();
+    if (next) next();
+  }).catch(err => alert('Memory operation failed: ' + err.message));
+}
+
+function pinMemoryNode(id, pinned) {
+  _memoryMutate('/api/nodes/pin', { id, pinned });
+}
+
+function editMemoryNode(id) {
+  const node = gDataFull.nodes.find(n => n.id === id);
+  const current = node ? (node.summary || '') : '';
+  const summary = prompt('Edit summary for ' + id + ':', current);
+  if (summary === null || summary === current) return;
+  _memoryMutate('/api/nodes/update', { id, summary }, () => initApp());
+}
+
+function deleteMemoryNode(id) {
+  if (!confirm('Delete node "' + id + '" and all its edges? This cannot be undone.')) return;
+  _memoryMutate('/api/nodes/delete', { id }, () => initApp());
+}
+
+function focusMemoryNode(id) {
+  const node = (gData.nodes || []).find(n => n.id === id) || (gDataFull.nodes || []).find(n => n.id === id);
+  if (!node) { alert('Node is filtered out of the current graph view.'); return; }
+  closeMemoryPanel();
+  focusOnNode(node);
+}

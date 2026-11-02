@@ -11,11 +11,13 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from memory_os.core.safe_id import validate_safe_id
+
+UTC = timezone.utc
 
 
 SPEC_TEMPLATE = """# Spec: {title}
@@ -222,7 +224,7 @@ class SpecManager:
         context = {
             "title": title.strip(),
             "description": description.strip() or "[NEEDS CLARIFICATION: Describe the user-visible goal.]",
-            "date": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "date": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "feature_id": feature_id,
         }
         paths = self._paths(feature_root)

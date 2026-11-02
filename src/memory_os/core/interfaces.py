@@ -56,6 +56,21 @@ class IMemoryOSConfig(ABC):
     def daemon_port(self) -> int:
         pass
 
+    @property
+    @abstractmethod
+    def confidence_threshold(self) -> float:
+        pass
+
+    @property
+    @abstractmethod
+    def semantic_similarity_threshold(self) -> float:
+        pass
+
+    @property
+    @abstractmethod
+    def semantic_fallback_threshold(self) -> float:
+        pass
+
 
 class IMemoryStorage(ABC):
     """Interface for Memory OS JSONL and JSON storage, separating disk I/O."""
@@ -103,7 +118,20 @@ class ILlmProviderService(ABC):
         system_prompt: str,
         provider: Optional[str] = None,
         model: Optional[str] = None,
+        response_schema: Optional[Dict[str, Any]] = None,
+        lora_role: Optional[str] = None,
+        max_tokens: Optional[int] = None,
     ) -> str:
+        """response_schema is a best-effort constraint: honored by backends
+        that support structured output at the API level (currently: local
+        Ollama via its `format` parameter); silently ignored by backends
+        that don't, so callers must still validate/parse the result.
+
+        lora_role: selects which LoRA adapter the llama_cpp/llama_server
+        providers load (None → action role, 'responder' → responder role).
+
+        max_tokens: token budget for the response. If None, derived from
+        lora_role (200 for action, 400 for responder)."""
         pass
 
 class IHardwareScheduler(ABC):

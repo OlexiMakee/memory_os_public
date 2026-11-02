@@ -1,4 +1,6 @@
 from dataclasses import dataclass, field
+import json
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 import uuid
 
@@ -43,8 +45,10 @@ class RelationPatch:
         )
 
 
-_EDGE_OPERATIONS = {"upsert_edge", "delete_edge_soft"}
-_NODE_OPERATIONS = {"upsert_node", "deprecate_node"}
+_EDGE_OPERATIONS = {"upsert_edge", "delete_edge_soft", "replace_edges"}
+_NODE_OPERATIONS = {"upsert_node", "deprecate_node", "update_node", "replace_nodes"}
+_EVENT_OPERATIONS = {"replace_events"}
+_CONTRACT_EDGE_OPERATIONS = {"upsert_edge", "delete_edge_soft"}
 
 
 class RelationPatchStore:
@@ -52,7 +56,9 @@ class RelationPatchStore:
 
     def __init__(self, repository: Any, registry: Any = None):
         self.repository = repository
-        # registry is a RelationContractRegistry; if None, contract checks are skipped.
+        if registry is None:
+            from memory_os.core.registry import RelationContractRegistry
+            registry = RelationContractRegistry()
         self.registry = registry
         self._patches: Dict[str, RelationPatch] = {p.id: p for p in repository.get_patches()}
 
@@ -62,7 +68,7 @@ class RelationPatchStore:
 
     def _validate_propose(self, patch: RelationPatch) -> None:
         """Raise PatchValidationError if the patch cannot be proposed."""
-        if self.registry is None or patch.operation not in _EDGE_OPERATIONS:
+        if self.registry is None or patch.operation not in _CONTRACT_EDGE_OPERATIONS:
             return
 
         contract = self.registry.get_contract(patch.type)
@@ -80,7 +86,7 @@ class RelationPatchStore:
 
     def _validate_apply(self, patch: RelationPatch) -> None:
         """Raise PatchValidationError if the patch cannot be applied."""
-        if self.registry is None or patch.operation not in _EDGE_OPERATIONS:
+        if self.registry is None or patch.operation not in _CONTRACT_EDGE_OPERATIONS:
             return
 
         contract = self.registry.get_contract(patch.type)
@@ -95,6 +101,107 @@ class RelationPatchStore:
                 f"{contract.min_verify_protocol}, but patch declares "
                 f"{patch.required_verification_protocol}."
             )
+
+    def _snapshot_before_apply(self, patch: RelationPatch) -> Dict[str, Any]:
+        if patch.operation in _NODE_OPERATIONS:
+            get_nodes = getattr(self.repository, "get_local_nodes", self.repository.get_nodes)
+            return {
+                "nodes": [
+                    node.to_dict() if hasattr(node, "to_dict") else dict(node)
+                    for node in get_nodes()
+                ]
+            }
+        if patch.operation in _EDGE_OPERATIONS:
+            return {
+                "edges": [
+                    edge.to_dict() if hasattr(edge, "to_dict") else dict(edge)
+                    for edge in self.repository.get_edges()
+                ]
+            }
+        if patch.operation in _EVENT_OPERATIONS:
+            return {"events": [dict(event) for event in self.repository.get_events()]}
+        return {}
+
+    def _apply_rollback_snapshot(self, patch: RelationPatch, snapshot: Dict[str, Any]) -> bool:
+        if not snapshot:
+            return False
+
+        if "nodes" in snapshot:
+            rollback_patch = self.repository._make_patch(
+                operation="replace_nodes",
+                target="memory/nodes.jsonl",
+                payload={"nodes": snapshot["nodes"]},
+                reason=f"rollback patch {patch.id}",
+            )
+        elif "edges" in snapshot:
+            rollback_patch = self.repository._make_patch(
+                operation="replace_edges",
+                target="memory/edges.jsonl",
+                payload={"edges": snapshot["edges"]},
+                reason=f"rollback patch {patch.id}",
+            )
+        elif "events" in snapshot:
+            rollback_patch = self.repository._make_patch(
+                operation="replace_events",
+                target="memory/events.jsonl",
+                payload={"events": snapshot["events"]},
+                reason=f"rollback patch {patch.id}",
+            )
+        else:
+            return False
+
+        from memory_os.core.timecode import now_local_iso
+
+        applied = self.repository.apply_patch(rollback_patch, events=[{
+            "event": "memory.patch.rolled_back",
+            "node_id": patch.target or patch.source,
+            "claim": f"Rolled back relation patch {patch.id}",
+            "evidence": patch.evidence,
+            "validator": "relation_patch_store",
+            "status": "accepted",
+            "patch_id": patch.id,
+            "rolled_back_patch_id": patch.id,
+            "timestamp": now_local_iso(getattr(self.repository, "config", None)),
+        }])
+        return applied
+
+    def _load_archived_rollback_snapshot(self, patch: RelationPatch) -> Optional[Dict[str, Any]]:
+        payload = patch.payload if isinstance(patch.payload, dict) else {}
+        archive_ref = payload.get("_rollback_archive")
+        if not archive_ref:
+            return None
+        archive_path = Path(str(archive_ref))
+        if not archive_path.is_absolute():
+            archive_path = self.repository.config.root_dir / archive_path
+        if not archive_path.exists():
+            return None
+        try:
+            for line in archive_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                if row.get("patch_id") != patch.id:
+                    continue
+                snapshot = row.get("rollback")
+                if isinstance(snapshot, dict):
+                    return snapshot
+        except (OSError, json.JSONDecodeError):
+            return None
+        return None
+
+    def _patch_event(self, patch: RelationPatch) -> Dict[str, Any]:
+        from memory_os.core.timecode import now_local_iso
+        return {
+            "event": f"memory.patch.{patch.operation}",
+            "node_id": patch.target or patch.source,
+            "claim": patch.reason or f"Applied relation patch {patch.id}",
+            "evidence": patch.evidence,
+            "validator": "relation_patch_store",
+            "status": "accepted",
+            "patch_id": patch.id,
+            "timestamp": now_local_iso(getattr(self.repository, "config", None)),
+        }
 
     # ------------------------------------------------------------------
     # Public API
@@ -111,7 +218,7 @@ class RelationPatchStore:
         self.repository.save_patch(patch)
         return patch.id
 
-    def apply(self, patch_id: str) -> bool:
+    def apply(self, patch_id: str, events: Optional[List[Dict[str, Any]]] = None) -> bool:
         """Apply a pending patch after verifying it meets the contract's verification threshold.
 
         Raises PatchValidationError if required_verification_protocol is below
@@ -126,50 +233,52 @@ class RelationPatchStore:
             return False
 
         self._validate_apply(patch)
+        snapshot = self._snapshot_before_apply(patch)
+        if snapshot:
+            patch.payload["_rollback"] = snapshot
 
-        from memory_os.core.models import MemoryNode, MemoryEdge
-
-        if patch.operation == "upsert_edge":
-            edge = MemoryEdge(
-                source=patch.source,
-                target=patch.target,
-                type=patch.type,
-                domain=patch.domain,
-                confidence=patch.confidence,
-                evidence=patch.evidence,
-                reason=patch.reason,
-            )
-            self.repository._add_edge(edge)
-        elif patch.operation == "upsert_node":
-            from datetime import datetime
-            node = MemoryNode(
-                id=patch.target,  # for node patches, target carries the node ID
-                type=patch.type,
-                summary=patch.payload.get("summary", ""),
-                evidence=patch.evidence,
-                domain=patch.domain,
-                trust="verified" if patch.confidence > 0.8 else "unverified",
-                valid_from=datetime.utcnow().isoformat() + "Z"
-            )
-            self.repository._add_node(node)
-        elif patch.operation == "delete_edge_soft":
-            edges = self.repository.get_edges()
-            new_edges = [
-                e for e in edges
-                if not (e.source == patch.source and e.target == patch.target and e.type == patch.type)
-            ]
-            self.repository._save_edges(new_edges)
-        elif patch.operation == "deprecate_node":
-            from datetime import datetime
-            nodes = self.repository.get_nodes()
-            for node in nodes:
-                if node.id == patch.target:
-                    node.status = "stale"
-                    node.valid_until = datetime.utcnow().isoformat() + "Z"
-            self.repository._save_nodes(nodes)
+        all_events = [self._patch_event(patch)]
+        if events:
+            all_events.extend(events)
+        applied = self.repository.apply_patch(patch, events=all_events)
+        if not applied:
+            return False
 
         patch.status = "applied"
         self.repository.save_patch(patch)
+        return True
+
+    def apply_many(self, patch_ids: List[str], events: Optional[List[Dict[str, Any]]] = None) -> bool:
+        """Apply multiple pending patches and refresh derived indexes once.
+
+        This keeps multi-file graph mutations closer together without changing
+        the underlying JSONL source-of-truth format.
+        """
+        patches = []
+        for patch_id in patch_ids:
+            patch = self._patches.get(patch_id)
+            if not patch or patch.status != "pending":
+                return False
+            self._validate_apply(patch)
+            patches.append(patch)
+
+        for idx, patch in enumerate(patches):
+            snapshot = self._snapshot_before_apply(patch)
+            if snapshot:
+                patch.payload["_rollback"] = snapshot
+            patch_events = [self._patch_event(patch)]
+            if events and idx == len(patches) - 1:
+                patch_events.extend(events)
+            applied = self.repository.apply_patch(patch, events=patch_events, sync=False)
+            if not applied:
+                return False
+            patch.status = "applied"
+            self.repository.save_patch(patch)
+
+        from memory_os.modules.search import MemorySearcher
+        searcher = MemorySearcher(config=self.repository.config, repository=self.repository)
+        for patch in patches:
+            searcher.incremental_sync(patch)
         return True
 
     def rollback(self, patch_id: str) -> bool:
@@ -185,6 +294,13 @@ class RelationPatchStore:
         if patch.status != "applied":
             return False
 
+        snapshot = patch.payload.get("_rollback")
+        if not isinstance(snapshot, dict):
+            snapshot = self._load_archived_rollback_snapshot(patch)
+        if not isinstance(snapshot, dict):
+            return False
+        if not self._apply_rollback_snapshot(patch, snapshot):
+            return False
         patch.status = "rolled_back"
         self.repository.save_patch(patch)
         return True

@@ -45,7 +45,8 @@ class BudgetManager:
             with open(self.state_file, "w", encoding="utf-8") as f:
                 json.dump(self._state, f)
         except Exception as e:
-            pass
+            import sys as _sys
+            print(f'Ignored exception: {e}', file=_sys.stderr)
 
     def add_usage(self, tokens: int):
         """Record usage of tokens."""

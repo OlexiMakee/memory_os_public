@@ -1,15 +1,18 @@
 # Memory OS — Architecture
 
-> Portable Agent Memory Kernel. Zero external dependencies. Drop this folder into any Python project.
+> Portable Agent Memory Runtime. Zero external dependencies. Drop this folder into any Python project.
 
 ## Overview
 
 Memory OS is a self-contained, SQLite-backed memory layer for autonomous AI agents. It provides:
-- **Graph memory** — nodes (rules, facts, configs, policies), edges, and lifecycle events
+- **Memory runtime** — durable, auditable, repeatable agent memory across sessions
+- **Graph-backed memory state** — internal representation for nodes (rules, facts, configs, policies), edges, and lifecycle events
 - **Telemetry** — LLM token/cost/latency tracking per prompt version
 - **Compaction** — converts raw task capsules into structured knowledge nodes via LLM
-- **Lifecycle** — draft → observed → verified → superseded transitions
-- **Search** — graph traversal + codebase symbol search
+- **Lifecycle** — draft → observed → verified → superseded transitions with explicit change control
+- **Retrieval** — graph traversal + codebase symbol search + provenance-aware context selection
+- **Domain adapters** — deterministic resource parsers that emit metadata and RelationPatch batches without coupling core memory to one source type
+- **Codebase analysis adapter** — AST metadata, dependency graph traversal, module clustering, and graph-map primitives live behind `CodebaseDomainAdapter`
 
 ## Directory Layout
 
@@ -26,6 +29,7 @@ memory_os/
   lifecycle.py         LifecycleManager — propose, transition, manifest, prune
   search.py            MemorySearcher — node + codebase symbol search
   context.py           ContextRegistry — snapshot builder
+  adapters.py          IDomainAdapter, DomainAdapterRegistry, patch-backed ingestor
   optimizer.py         RouteOptimizer — recommend LLM provider based on telemetry
   versioner.py         PromptVersioner — template registry + SHA-256 integrity
   telemetry.py         TelemetryRecorder — SQLite telemetry writer
@@ -82,12 +86,18 @@ No Flask. No `app.*` imports. No governance DB. Pure Python stdlib.
 
 Memory OS follows a local-first computing philosophy. The system is designed to maximize useful local computation and minimize unnecessary LLM calls.
 
-It treats the language model not as the whole system, but as one component in a broader local runtime: a dispatcher, interpreter, summarizer, and reasoning module used **only when language intelligence is actually needed**.
+It treats the language model not as the whole system, but as one component in a broader local runtime: a dispatcher, interpreter, summarizer, and reasoning module used **only when language intelligence is actually needed**. The product is the memory runtime; the graph is an implementation detail.
 
 ### Core Principles
 1. **Local Preprocessing**: Search, indexing, filtering, classification, validation, caching, file operations, and structured computation must be handled by local tools, scripts, databases, and specialized models whenever possible.
 2. **Resource Politeness**: Memory OS must use the available hardware rationally. CPU, GPU, RAM, and storage are treated as resources to be scheduled, balanced, and protected. The system adapts its workload to preserve enough resources for the user to continue working in parallel.
 3. **LLM as Dispatcher, not Loader**: The goal is not to ask a large model to read raw files and solve everything. The goal is to build a local operating layer that prepares small, precise, high-value prompts and delegates only the truly necessary parts to an LLM.
+4. **Memory Quality over Graph Size**: lifecycle, provenance, curation, retrieval quality, and repeatability matter more than the number of nodes or edges.
+5. **Patch-backed Change Control**: memory writes should be auditable and replayable; direct mutation paths are technical debt unless measurements prove otherwise.
+6. **SOLID Core**: core modules keep one responsibility, depend on interfaces, and let CLI/UI/adapters compose concrete implementations.
+7. **Unix Surface**: commands do one thing, support scriptable JSON output, expose `--dry-run` for meaningful writes, and fail with useful exit codes.
+8. **Portable by Default**: the memory engine must run without a specific desktop shell, terminal runtime, host app, SDK, cloud provider, or non-stdlib dependency. Linux is the primary development profile, macOS is a first-class product target, and Windows is deferred until the memory runtime is complete enough to justify dedicated platform adapters.
+9. **Modular Product Surfaces**: memory engine, swarm workspace, UI, desktop tooling, and optional adapters must be reusable without forcing the whole stack.
 
 ### The Architectural Formula
 * **LLM speaks little.**

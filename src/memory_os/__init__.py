@@ -7,7 +7,6 @@ from memory_os.core.telemetry import TelemetryRecorder
 from memory_os.modules.versioner import PromptVersioner
 from memory_os.modules.context import ContextRegistry
 from memory_os.modules.optimizer import RouteOptimizer
-from memory_os.core.toml_parser import parse_toml, load_toml_file
 from memory_os.core.prompt_formatter import (
     wrap_in_xml,
     format_user_profile,
@@ -23,6 +22,15 @@ from memory_os.modules.search import MemorySearcher
 from memory_os.core.interfaces import IMemoryOSConfig, IMemoryStorage, ILlmProviderService
 from memory_os.core.storage import FileSystemMemoryStorage
 from memory_os.core.llm_service import DefaultLlmProviderService
+from memory_os.core.adapters import (
+    IDomainAdapter,
+    AstDomainAdapter,
+    GrepDomainAdapter,
+    CodebaseDomainAdapter,
+    DomainAdapterRegistry,
+    DomainAdapterIngestor,
+    DomainIngestResult,
+)
 
 __all__ = [
     "MemoryOS",
@@ -30,8 +38,6 @@ __all__ = [
     "PromptVersioner",
     "ContextRegistry",
     "RouteOptimizer",
-    "parse_toml",
-    "load_toml_file",
     "wrap_in_xml",
     "format_user_profile",
     "markdown_table_to_html",
@@ -47,4 +53,11 @@ __all__ = [
     "ILlmProviderService",
     "FileSystemMemoryStorage",
     "DefaultLlmProviderService",
+    "IDomainAdapter",
+    "AstDomainAdapter",
+    "GrepDomainAdapter",
+    "CodebaseDomainAdapter",
+    "DomainAdapterRegistry",
+    "DomainAdapterIngestor",
+    "DomainIngestResult",
 ]

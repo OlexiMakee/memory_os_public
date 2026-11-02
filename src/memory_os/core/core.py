@@ -35,7 +35,7 @@ class MemoryOS:
         self.init_db()
 
     def get_connection(self) -> sqlite3.Connection:
-        """Get a thread-safe connection to the isolated telemetry database."""
+        """Get a rollback-journal connection to the isolated SQLite index."""
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
@@ -49,7 +49,6 @@ class MemoryOS:
                 conn.execute(f"INSERT INTO {table}({table}) VALUES('optimize')")
             conn.execute("ANALYZE")
             conn.commit()
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             conn.execute("VACUUM")
         finally:
             conn.close()
@@ -154,6 +153,13 @@ class MemoryOS:
                     last_accessed TEXT DEFAULT ''
                 )
             """)
+            existing_graph_node_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(graph_nodes)").fetchall()
+            }
+            if "access_count" not in existing_graph_node_cols:
+                conn.execute("ALTER TABLE graph_nodes ADD COLUMN access_count INTEGER DEFAULT 0")
+            if "last_accessed" not in existing_graph_node_cols:
+                conn.execute("ALTER TABLE graph_nodes ADD COLUMN last_accessed TEXT DEFAULT ''")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(type)")
             
             # Graph Nodes FTS
@@ -325,6 +331,43 @@ class MemoryOS:
                 (source, target, edge_type)
             )
             conn.commit()
+        finally:
+            conn.close()
+
+    def delete_graph_node(self, node_id: str) -> None:
+        conn = self.get_connection()
+        try:
+            conn.execute("DELETE FROM graph_nodes WHERE id = ?", (node_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def delete_graph_edge(self, source: str, target: str, edge_type: str) -> None:
+        conn = self.get_connection()
+        try:
+            conn.execute(
+                "DELETE FROM graph_edges WHERE source = ? AND target = ? AND type = ?",
+                (source, target, edge_type),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_graph_node_summaries(self, node_ids: Optional[List[str]] = None) -> Dict[str, str]:
+        """Return {node_id: summary} for the given ids, or every indexed node if node_ids is None."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            if node_ids is None:
+                cursor.execute("SELECT id, summary FROM graph_nodes")
+            else:
+                if not node_ids:
+                    return {}
+                placeholders = ",".join(["?"] * len(node_ids))
+                cursor.execute(f"SELECT id, summary FROM graph_nodes WHERE id IN ({placeholders})", list(node_ids))
+            return {row[0]: row[1] for row in cursor.fetchall()}
+        except sqlite3.Error:
+            return {}
         finally:
             conn.close()
 

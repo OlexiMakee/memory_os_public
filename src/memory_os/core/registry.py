@@ -40,6 +40,14 @@ class RelationContractRegistry:
             layer="structural", default_protocol_level=1, deterministic=True,
             min_create_protocol=0, min_verify_protocol=0,
         ))
+        self.register("co_tagged", RelationContract(
+            layer="structural", default_protocol_level=1, deterministic=True,
+            min_create_protocol=0, min_verify_protocol=1,
+        ))
+        self.register("co_created", RelationContract(
+            layer="structural", default_protocol_level=1, deterministic=True,
+            min_create_protocol=0, min_verify_protocol=1,
+        ))
 
         # --- Operational (P2–P4) ---
         self.register("configures", RelationContract(

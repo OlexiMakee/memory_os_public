@@ -30,10 +30,13 @@ class PolyglotExporter:
         node_id: str, 
         node_type: str, 
         summary: str, 
-        evidence: List[str], 
+        evidence: List[str],
+        status: str,
         globs: Optional[List[str]] = None
     ):
         """Dispatches node data to all supported agent tool formats."""
+        if status != "verified":
+            return
         skill_types = {"rule", "fact", "config", "policy", "skill"}
         if node_type not in skill_types:
             return

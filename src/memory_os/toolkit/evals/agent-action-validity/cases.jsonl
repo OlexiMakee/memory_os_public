@@ -1,0 +1,5 @@
+{"id": "picks-memory-search", "task": "Find anything we already know about force-push safety rules.", "expected_action": "memory.search", "expected_args": {"query": true}}
+{"id": "picks-memory-write", "task": "Remember this rule: always run the test suite before committing.", "expected_action": "memory.write", "expected_args": {"memory_text": ["summary", "rule", "fact", "content", "text"], "type": true}}
+{"id": "picks-file-read", "task": "Show me the contents of README.md.", "expected_action": "file.read", "expected_args": {"path": true}}
+{"id": "picks-memory-write-fact-style", "task": "Save this fact: Python 3.14 breaks dill due to pickle internals change.", "expected_action": "memory.write", "expected_args": {"memory_text": ["summary", "rule", "fact", "content", "text"]}}
+{"id": "picks-file-read-specific-path", "task": "Open src/memory_os/core/llm_service.py and show its content.", "expected_action": "file.read", "expected_args": {"path": true}}

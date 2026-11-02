@@ -49,6 +49,7 @@ class MemoryNode:
     valid_until: str = ""
     access_count: int = 0
     last_accessed: str = ""
+    confidence: float = 1.0
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MemoryNode":
@@ -67,6 +68,9 @@ class MemoryNode:
             indexable=data.get("indexable", True),
             valid_from=data.get("valid_from", ""),
             valid_until=data.get("valid_until", ""),
+            access_count=int(data.get("access_count", 0) or 0),
+            last_accessed=data.get("last_accessed", ""),
+            confidence=float(data.get("confidence", 1.0) or 1.0),
         )
 
     def to_dict(self) -> Dict[str, Any]:

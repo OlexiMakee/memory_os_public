@@ -35,20 +35,7 @@ def main():
         trust="verified",
         tags=args.tags.split(",") if args.tags else []
     )
-    repo.add_node(node)
-    
-    # Also sync to SQLite immediately
-    from memory_os.core.core import MemoryOS
-    db = MemoryOS(config)
-    db.insert_graph_node(
-        node_id=node.id,
-        node_type=node.type,
-        summary=node.summary,
-        status=node.status,
-        freshness=node.freshness,
-        trust=node.trust,
-        tags=",".join(node.tags) if node.tags else None
-    )
+    repo.upsert_node(node)
     
     print(f"Successfully created node: {args.id}")
 
@@ -65,7 +52,8 @@ Usage: python3 archive_memory_node.py <node_id>
 import sys
 import argparse
 from memory_os.core.config import MemoryOSConfig
-from memory_os.core.core import MemoryOS
+from memory_os.core.repository import MemoryRepository
+from memory_os.core.storage import FileSystemMemoryStorage
 
 def main():
     parser = argparse.ArgumentParser(description="Archive a Memory OS node")
@@ -73,19 +61,11 @@ def main():
     args = parser.parse_args()
     
     config = MemoryOSConfig()
-    db = MemoryOS(config)
-    conn = db.get_connection()
-    try:
-        # We supersede it by setting valid_to = CURRENT_TIMESTAMP
-        cursor = conn.cursor()
-        cursor.execute("UPDATE graph_nodes SET valid_to = datetime('now', 'localtime') WHERE id = ? AND valid_to IS NULL", (args.id,))
-        if cursor.rowcount > 0:
-            print(f"Successfully archived active node: {args.id}")
-        else:
-            print(f"No active node found with ID: {args.id}")
-        conn.commit()
-    finally:
-        conn.close()
+    repo = MemoryRepository(FileSystemMemoryStorage(), config)
+    if repo.update_node(args.id, {"status": "superseded"}):
+        print(f"Successfully archived active node: {args.id}")
+    else:
+        print(f"No active node found with ID: {args.id}")
 
 if __name__ == "__main__":
     main()

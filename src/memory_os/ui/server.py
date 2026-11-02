@@ -6,8 +6,12 @@ from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
 from memory_os.core.config import MemoryOSConfig
+from memory_os.core.logger import get_logger
 from memory_os.core.safe_id import validate_safe_id
 from memory_os.ui.data_provider import DefaultGraphDataProvider
+from memory_os.toolkit.memory_graph_service import MemoryGraphService
+
+logger = get_logger(__name__)
 
 # Setup mimetypes for UI assets
 mimetypes.add_type('application/javascript', '.js')
@@ -38,10 +42,12 @@ def _find_federated_spaces(base_dir: Path) -> list:
                                 cfg2 = d2 / "memory_os.config.json"
                                 if cfg2.exists() and d2 != base_dir:
                                     federated.append(f"federated:{d2.resolve()}")
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+                    except Exception as _e:
+                        import sys as _sys
+                        print(f'Ignored exception: {_e}', file=_sys.stderr)
+    except Exception as _e:
+        import sys as _sys
+        print(f'Ignored exception: {_e}', file=_sys.stderr)
     return sorted(list(set(federated)))
 
 class UIHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -105,6 +111,44 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _memory_service(self) -> MemoryGraphService:
+        return MemoryGraphService(self.server.provider.config)
+
+    def _memory_write_read_only(self) -> bool:
+        config = self.server.provider.config
+        cwd = Path.cwd().resolve()
+        return (
+            getattr(config, 'is_federated_ui_mode', False)
+            or getattr(self.server.provider, 'is_federated', False)
+            or (config.root_dir != cwd and str(config.root_dir) not in str(cwd))
+        )
+
+    def _reject_memory_write_if_read_only(self) -> bool:
+        if self._memory_write_read_only():
+            self.send_error(403, 'Read-only in federated mode')
+            return True
+        return False
+
+    def _json_not_found_status(self, payload: dict) -> int:
+        return 404 if payload.get("status") == "not_found" else 200
+
+    def _handle_memory_write_action(self, action_fn, use_not_found_status: bool = True) -> None:
+        """Shared skeleton for the /api/nodes|edges write endpoints: read-only
+        guard, payload parse, ValueError->400, JSON response."""
+        if self._reject_memory_write_if_read_only():
+            return
+        payload = self._read_json_body()
+        if not payload:
+            self.send_error(400, "Missing payload")
+            return
+        try:
+            result = action_fn(payload)
+        except ValueError as exc:
+            self.send_error(400, str(exc))
+            return
+        status = self._json_not_found_status(result) if use_not_found_status else 200
+        self._json_response(result, status=status)
+
     def do_GET(self):
         if self._reject_cross_origin():
             return
@@ -130,6 +174,113 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
             
             data = self.server.provider.get_graph_data()
             self.wfile.write(json.dumps(data).encode("utf-8"))
+            return
+
+        if path == '/api/memory/health':
+            service = self._memory_service()
+            self._json_response(service.health())
+            return
+
+        if path == '/api/memory/curate':
+            qs = parse_qs(parsed.query)
+            limit = int(qs.get("limit", ["10"])[0] or 10)
+            service = self._memory_service()
+            self._json_response(service.curate(limit=limit))
+            return
+
+        if path == '/api/memory/merge-preview':
+            qs = parse_qs(parsed.query)
+            limit = int(qs.get("limit", ["10"])[0] or 10)
+            service = self._memory_service()
+            self._json_response(service.merge_preview(limit=limit))
+            return
+
+        if path == '/api/memory/merge-apply':
+            qs = parse_qs(parsed.query)
+            limit = int(qs.get("limit", ["10"])[0] or 10)
+            dry_run = qs.get("dry_run", ["false"])[0].lower() in {"1", "true", "yes", "on"}
+            service = self._memory_service()
+            self._json_response(service.merge_apply(limit=limit, dry_run=dry_run))
+            return
+
+        if path == '/api/memory/browse':
+            qs = parse_qs(parsed.query)
+            service = self._memory_service()
+            payload = service.browse(
+                query=qs.get("query", [""])[0],
+                node_id=qs.get("node_id", [None])[0],
+                depth=int(qs.get("depth", ["1"])[0] or 1),
+                limit=int(qs.get("limit", ["3"])[0] or 3),
+                neighbors=int(qs.get("neighbors", ["8"])[0] or 8),
+                edges_limit=int(qs.get("edges", ["12"])[0] or 12),
+            )
+            self._json_response(payload)
+            return
+
+        if path == '/api/memory/timeline':
+            qs = parse_qs(parsed.query)
+            service = self._memory_service()
+            self._json_response(service.timeline(
+                days=qs.get("days", ["30"])[0],
+                node_type=qs.get("type", [""])[0],
+                status=qs.get("status", [""])[0],
+            ))
+            return
+
+        if path == '/api/memory/export':
+            service = self._memory_service()
+            body = json.dumps(service.export_graph()).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Disposition", 'attachment; filename="memory_export.json"')
+            self._send_cors_headers()
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == '/api/memory/nodes':
+            qs = parse_qs(parsed.query)
+            service = self._memory_service()
+            self._json_response(service.list_nodes(
+                query=qs.get("query", [""])[0],
+                node_type=qs.get("type", [""])[0],
+                status=qs.get("status", [""])[0],
+                trust=qs.get("trust", [""])[0],
+                tag=qs.get("tag", [""])[0],
+                limit=qs.get("limit", ["100"])[0],
+                offset=qs.get("offset", ["0"])[0],
+            ))
+            return
+
+        if path == '/api/memory/node':
+            qs = parse_qs(parsed.query)
+            node_id = qs.get("id", [""])[0]
+            if not node_id:
+                self.send_error(400, "Missing 'id' parameter")
+                return
+            payload = self._memory_service().get_node(node_id)
+            self._json_response(payload, status=self._json_not_found_status(payload))
+            return
+
+        if path == '/api/memory/edges':
+            qs = parse_qs(parsed.query)
+            service = self._memory_service()
+            self._json_response(service.list_edges(
+                source=qs.get("source", [""])[0],
+                target=qs.get("target", [""])[0],
+                edge_type=qs.get("type", [""])[0],
+                limit=qs.get("limit", ["100"])[0],
+                offset=qs.get("offset", ["0"])[0],
+            ))
+            return
+
+        if path == '/api/memory/events':
+            qs = parse_qs(parsed.query)
+            service = self._memory_service()
+            self._json_response(service.list_events(
+                node_id=qs.get("node_id", [""])[0],
+                limit=qs.get("limit", ["50"])[0],
+            ))
             return
             
         elif path == '/api/spaces':
@@ -161,6 +312,21 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data).encode("utf-8"))
             return
             
+        elif path == '/api/tasks':
+            qs = parse_qs(parsed.query)
+            status_filter = qs.get('status', [None])[0]
+            try:
+                from memory_os.toolkit.task_kernel import TaskKernel
+                kernel = TaskKernel(self.server.provider.config.root_dir)
+                tasks = kernel.list_tasks(status=status_filter)
+                tasks_sorted = sorted(tasks, key=lambda t: t.get("updated_at", ""), reverse=True)
+            except Exception as exc:
+                logger.error("GET /api/tasks failed: %s", exc, exc_info=True)
+                self._json_response({"tasks": [], "total": 0, "error": str(exc)}, status=500)
+                return
+            self._json_response({"tasks": tasks_sorted, "total": len(tasks_sorted)})
+            return
+
         elif path == '/api/read_file':
             qs = parse_qs(parsed.query)
             file_path = qs.get('path', [''])[0]
@@ -290,136 +456,93 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
                         if not space_dir.exists() or not (space_dir / "nodes.jsonl").exists():
                             new_space = "default"
 
+                    from memory_os.toolkit.daemon_client import DaemonClient
+
+                    daemon_response = DaemonClient(
+                        self.server.provider.config.root_dir,
+                        self.server.provider.config.daemon_port,
+                        timeout=1,
+                    ).request(
+                        "/space",
+                        method="POST",
+                        body={"space": new_space},
+                    )
+                    if not daemon_response.ok or daemon_response.payload.get("status") != "space_switched":
+                        error = daemon_response.payload.get("error") or daemon_response.error or "daemon rejected space switch"
+                        status = daemon_response.status_code if 400 <= daemon_response.status_code < 600 else 503
+                        self._json_response({"status": "error", "error": error}, status=status)
+                        return
+
                     self.server.provider.config.space = new_space
                     self.server.provider.repo = MemoryRepository(FileSystemMemoryStorage(), self.server.provider.config)
 
-                    import urllib.request
-                    url = f"http://127.0.0.1:{self.server.provider.config.daemon_port}/space"
-                    req = urllib.request.Request(
-                        url,
-                        data=json.dumps({"space": new_space}).encode("utf-8"),
-                        headers={"Content-Type": "application/json"},
-                        method="POST"
-                    )
-                    try:
-                        with urllib.request.urlopen(req, timeout=1):
-                            pass
-                    except Exception:
-                        pass
-
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self._send_cors_headers()
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "ok", "space": new_space}).encode("utf-8"))
+                self._json_response({"status": "ok", "space": new_space})
                 return
 
             elif path == '/api/nodes/verify':
-                if getattr(self.server.provider.config, 'is_federated_ui_mode', False) or getattr(self.server.provider, 'is_federated', False) or (self.server.provider.config.root_dir != Path.cwd().resolve() and str(self.server.provider.config.root_dir) not in str(Path.cwd().resolve())):
-                    self.send_error(403, 'Read-only in federated mode')
-                    return
-                payload = self._read_json_body()
-                if not payload:
-                    self.send_error(400, "Missing payload")
-                    return
-                node_id = payload.get("id")
-                repo = self.server.provider.repo
-                nodes = repo.get_nodes()
-                for n in nodes:
-                    if n.id == node_id:
-                        n.trust = "verified"
-                        n.protocol_level = 99
-                        break
-                repo.save_nodes(nodes)
-
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self._send_cors_headers()
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+                self._handle_memory_write_action(
+                    lambda p: self._memory_service().verify_node(p.get("id", ""))
+                )
                 return
 
             elif path == '/api/edges/create':
-                if getattr(self.server.provider.config, 'is_federated_ui_mode', False) or getattr(self.server.provider, 'is_federated', False) or (self.server.provider.config.root_dir != Path.cwd().resolve() and str(self.server.provider.config.root_dir) not in str(Path.cwd().resolve())):
-                    self.send_error(403, 'Read-only in federated mode')
-                    return
-                payload = self._read_json_body()
-                if not payload:
-                    self.send_error(400, "Missing payload")
-                    return
-                from memory_os.core.models import MemoryEdge
-                edge = MemoryEdge(
-                    source=payload.get("source"),
-                    target=payload.get("target"),
-                    type=payload.get("type", "depends_on"),
-                    confidence=1.0,
-                    reason="Manual link created by user via UI"
-                )
-                repo = self.server.provider.repo
-                repo.add_edge(edge)
-
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self._send_cors_headers()
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+                def _create_edge(p):
+                    p.setdefault("confidence", 1.0)
+                    p.setdefault("reason", "Manual link created by user via UI")
+                    return self._memory_service().upsert_edge(p)
+                self._handle_memory_write_action(_create_edge, use_not_found_status=False)
                 return
 
             elif path == '/api/nodes/merge':
-                if getattr(self.server.provider.config, 'is_federated_ui_mode', False) or getattr(self.server.provider, 'is_federated', False) or (self.server.provider.config.root_dir != Path.cwd().resolve() and str(self.server.provider.config.root_dir) not in str(Path.cwd().resolve())):
-                    self.send_error(403, 'Read-only in federated mode')
-                    return
-                payload = self._read_json_body()
-                if not payload:
-                    self.send_error(400, "Missing payload")
-                    return
-                source_id = payload.get("source") # node to delete
-                target_id = payload.get("target") # node to keep
-                repo = self.server.provider.repo
-                
-                nodes = repo.get_nodes()
-                edges = repo.get_edges()
-                
-                source_node = next((n for n in nodes if n.id == source_id), None)
-                target_node = next((n for n in nodes if n.id == target_id), None)
-                
-                if source_node and target_node:
-                    target_node.evidence = list(set(target_node.evidence + source_node.evidence))
-                    target_node.tags = list(set(target_node.tags + source_node.tags))
-                    if source_node.summary not in target_node.summary:
-                        target_node.summary += " | Merged from: " + source_node.summary
-                        
-                # Delete source node
-                new_nodes = [n for n in nodes if n.id != source_id]
-                
-                # Reroute edges
-                new_edges = []
-                for e in edges:
-                    if e.source == source_id:
-                        e.source = target_id
-                    if e.target == source_id:
-                        e.target = target_id
-                    
-                    if e.source != e.target:
-                        new_edges.append(e)
-                
-                # Remove duplicate edges
-                unique_edges = []
-                seen = set()
-                for e in new_edges:
-                    key = (e.source, e.target, e.type)
-                    if key not in seen:
-                        seen.add(key)
-                        unique_edges.append(e)
-                        
-                repo.save_nodes(new_nodes)
-                repo.save_edges(unique_edges)
+                self._handle_memory_write_action(
+                    lambda p: self._memory_service().merge_nodes(p.get("source", ""), p.get("target", ""))
+                )
+                return
 
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self._send_cors_headers()
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
+            elif path == '/api/nodes/update':
+                self._handle_memory_write_action(
+                    lambda p: self._memory_service().update_node(
+                        p.get("id", ""),
+                        summary=p.get("summary") if "summary" in p else None,
+                        tags=p.get("tags") if "tags" in p else None,
+                    )
+                )
+                return
+
+            elif path == '/api/nodes/delete':
+                self._handle_memory_write_action(
+                    lambda p: self._memory_service().delete_node(p.get("id", ""))
+                )
+                return
+
+            elif path == '/api/nodes/pin':
+                self._handle_memory_write_action(
+                    lambda p: self._memory_service().pin_node(p.get("id", ""), bool(p.get("pinned", False)))
+                )
+                return
+
+            elif path == '/api/nodes/upsert':
+                self._handle_memory_write_action(
+                    lambda p: self._memory_service().upsert_node(p)
+                )
+                return
+
+            elif path == '/api/nodes/archive':
+                self._handle_memory_write_action(
+                    lambda p: self._memory_service().archive_node(p.get("id") or p.get("node_id", ""), p.get("reason", ""))
+                )
+                return
+
+            elif path == '/api/edges/upsert':
+                self._handle_memory_write_action(
+                    lambda p: self._memory_service().upsert_edge(p), use_not_found_status=False
+                )
+                return
+
+            elif path == '/api/edges/delete':
+                self._handle_memory_write_action(
+                    lambda p: self._memory_service().delete_edge(p.get("source", ""), p.get("target", ""), p.get("type", ""))
+                )
                 return
 
             elif path == '/api/link-infer':
@@ -456,7 +579,8 @@ class UIHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
         except ValueError as exc:
             self.send_error(413, str(exc))
-        except Exception:
+        except Exception as exc:
+            logger.error("POST %s failed: %s", self.path, exc, exc_info=True)
             self.send_error(500, "Internal Server Error")
 
 class MemoryOSServer(HTTPServer):
@@ -464,8 +588,10 @@ class MemoryOSServer(HTTPServer):
         super().__init__(server_address, RequestHandlerClass)
         self.provider = provider
 
-def run_ui_server(config: MemoryOSConfig, port: int = 8080):
+def run_ui_server(config: MemoryOSConfig, port: int | None = None):
     """Starts the built-in HTTP server for the UI."""
+    if port is None:
+        port = getattr(config, "ui_port", 8080)
     provider = DefaultGraphDataProvider(config)
     server_address = ('127.0.0.1', port)
     

@@ -1,5 +1,5 @@
 """
-Graph Mapper — Graphify-inspired structural analysis for Memory OS.
+Graph Mapper — structural codebase analysis for Memory OS.
 
 Reads the project snapshot to compute:
   - God nodes: files with the highest in-degree (most depended upon)
@@ -7,35 +7,29 @@ Reads the project snapshot to compute:
   - Writes agent_context/codebase_map.md for compile-prompt injection
   - Optionally emits module_cluster nodes into memory/nodes.jsonl
 
-Graphify's key insight applied here: separate *extracted* facts (AST-derived
-imports, classes, routes) from *inferred* structure (clusters, rankings).
-Both are useful; only one is ground truth.
+Separates extracted facts (AST-derived imports, classes, routes) from inferred
+structure (clusters, rankings). Both are useful; only one is ground truth.
 """
 
 from __future__ import annotations
 
 import json
-from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple  # noqa: F401
 
 from memory_os.core.config import MemoryOSConfig
+from memory_os.core.adapters import CodebaseDomainAdapter, DomainAdapterRegistry
 from memory_os.core.storage import FileSystemMemoryStorage
+
+UTC = timezone.utc
 
 GOD_NODE_TOP_N = 8
 CLUSTER_TOP_N = 6
 
 
 def _resolve_dep_to_file(dep: str, all_files: List[str]) -> Optional[str]:
-    dep_lower = dep.lower()
-    for f in all_files:
-        p = Path(f)
-        stem = p.stem.lower()
-        mod_path = p.with_suffix("").as_posix().replace("/", ".").lower()
-        if dep_lower == stem or dep_lower == mod_path or mod_path.endswith("." + dep_lower):
-            return f
-    return None
+    return CodebaseDomainAdapter().resolve_dependency_to_file(dep, all_files)
 
 
 def build_dependency_graph(
@@ -46,19 +40,7 @@ def build_dependency_graph(
         forward: file -> set of files it imports
         reverse: file -> set of files that import it (in-degree sources)
     """
-    all_files = [item["meta"]["file"] for item in items]
-    forward: Dict[str, Set[str]] = defaultdict(set)
-    reverse: Dict[str, Set[str]] = defaultdict(set)
-
-    for item in items:
-        src = item["meta"]["file"]
-        for dep in item["meta"].get("dependencies", []):
-            target = _resolve_dep_to_file(dep, all_files)
-            if target and target != src:
-                forward[src].add(target)
-                reverse[target].add(src)
-
-    return dict(forward), dict(reverse)
+    return CodebaseDomainAdapter().build_dependency_graph(items)
 
 
 def compute_god_nodes(
@@ -66,29 +48,7 @@ def compute_god_nodes(
     items: List[Dict[str, Any]],
     top_n: int = GOD_NODE_TOP_N,
 ) -> List[Dict[str, Any]]:
-    """Return top_n files by in-degree. Trust: extracted."""
-    in_degree = {
-        item["meta"]["file"]: len(reverse.get(item["meta"]["file"], set()))
-        for item in items
-    }
-    ranked = sorted(in_degree.items(), key=lambda x: x[1], reverse=True)
-    results = []
-    for filepath, degree in ranked[:top_n]:
-        if degree == 0:
-            break
-        item = next((i for i in items if i["meta"]["file"] == filepath), None)
-        meta = item["meta"] if item else {}
-        results.append({
-            "file": filepath,
-            "in_degree": degree,
-            "layer": meta.get("layer", "unknown"),
-            "classes": meta.get("classes", []),
-            "functions": meta.get("functions", []),
-            "routes": meta.get("routes", []),
-            "dependents": sorted(reverse.get(filepath, set())),
-            "trust": "extracted",
-        })
-    return results
+    return CodebaseDomainAdapter().compute_god_nodes(reverse, items, top_n=top_n)
 
 
 def compute_clusters(
@@ -96,30 +56,7 @@ def compute_clusters(
     forward: Dict[str, Set[str]],
     top_n: int = CLUSTER_TOP_N,
 ) -> List[Dict[str, Any]]:
-    """
-    Group files by top-level directory; rank by internal coupling.
-    Trust: inferred (directory grouping is structural, not semantic).
-    """
-    dir_files: Dict[str, List[str]] = defaultdict(list)
-    for item in items:
-        f = item["meta"]["file"]
-        top_dir = Path(f).parts[0] if len(Path(f).parts) > 1 else "root"
-        dir_files[top_dir].append(f)
-
-    clusters = []
-    for dir_name, files in sorted(dir_files.items(), key=lambda x: -len(x[1])):
-        if len(files) < 2:
-            continue
-        file_set = set(files)
-        internal_edges = sum(len(forward.get(f, set()) & file_set) for f in files)
-        clusters.append({
-            "name": dir_name,
-            "files": sorted(files),
-            "file_count": len(files),
-            "internal_edges": internal_edges,
-            "trust": "inferred",
-        })
-    return sorted(clusters, key=lambda x: x["internal_edges"], reverse=True)[:top_n]
+    return CodebaseDomainAdapter().compute_clusters(items, forward, top_n=top_n)
 
 
 def build_markdown(
@@ -188,9 +125,17 @@ def build_markdown(
 
 
 class GraphMapper:
-    def __init__(self, config: Optional[MemoryOSConfig] = None):
+    def __init__(
+        self,
+        config: Optional[MemoryOSConfig] = None,
+        domain_adapters: Optional[DomainAdapterRegistry] = None,
+    ):
         self.config = config or MemoryOSConfig()
         self.storage = FileSystemMemoryStorage()
+        self.domain_adapters = domain_adapters or DomainAdapterRegistry()
+        self.codebase_adapter = self.domain_adapters.require("codebase")
+        if not isinstance(self.codebase_adapter, CodebaseDomainAdapter):
+            raise TypeError("codebase domain adapter must be a CodebaseDomainAdapter")
 
     def run(self, emit_nodes: bool = False) -> Dict[str, Any]:
         snapshot_path = self.config.snapshot_file
@@ -205,14 +150,14 @@ class GraphMapper:
 
         snapshot = self.storage.load_json(snapshot_path)
         items = snapshot.get("items", [])
-        generated_at = snapshot.get("generated_at", datetime.utcnow().isoformat() + "Z")
+        generated_at = snapshot.get("generated_at", datetime.now(UTC).isoformat().replace("+00:00", "Z"))
 
         if not items:
             return {"status": "error", "reason": "Snapshot has no items."}
 
-        forward, reverse = build_dependency_graph(items)
-        god_nodes = compute_god_nodes(reverse, items)
-        clusters = compute_clusters(items, forward)
+        forward, reverse = self.codebase_adapter.build_dependency_graph(items)
+        god_nodes = self.codebase_adapter.compute_god_nodes(reverse, items)
+        clusters = self.codebase_adapter.compute_clusters(items, forward)
 
         md = build_markdown(god_nodes, clusters, generated_at, len(items))
         out_path = self.config.root_dir / "agent_context" / "codebase_map.md"
@@ -231,33 +176,60 @@ class GraphMapper:
         }
 
     def _emit_cluster_nodes(self, clusters: List[Dict[str, Any]], generated_at: str) -> None:
+        """Emit module_cluster MemoryNodes and contains edges.
+
+        Each cluster → MemoryNode with type=module_cluster.
+        Each cluster → contains → any existing MemoryNode whose evidence lists files
+        in that cluster (connecting structural codebase knowledge to memory facts).
+        New nodes trigger a background Stage-0 link inference to wire them into the graph.
+        """
         nodes_path = self.config.memory_dir / "nodes.jsonl"
         existing = self.storage.load_jsonl(nodes_path) if nodes_path.exists() else []
         existing_ids = {n["id"] for n in existing}
 
         new_nodes = []
+        emitted_cluster_ids: set = set()
         for cluster in clusters:
-            node_id = f"structure.cluster.{cluster['name'].replace('/', '.')}"
+            node_id = self.codebase_adapter.cluster_node_id(str(cluster["name"]))
             if node_id in existing_ids:
                 continue
-            new_nodes.append({
-                "id": node_id,
-                "type": "module_cluster",
-                "summary": (
-                    f"Module cluster '{cluster['name']}': "
-                    f"{cluster['file_count']} files, "
-                    f"{cluster['internal_edges']} internal import edges. "
-                    f"Files: {', '.join(cluster['files'][:6])}"
-                    + (" …" if len(cluster["files"]) > 6 else ".")
-                ),
-                "evidence": cluster["files"],
-                "status": "verified",
-                "freshness": generated_at,
-                "trust": "inferred",
-                "related_nodes": [],
-            })
+            new_nodes.append(self.codebase_adapter.cluster_to_node(cluster, generated_at))
+            emitted_cluster_ids.add(node_id)
 
         if new_nodes:
-            with open(nodes_path, "a", encoding="utf-8") as f:
-                for node in new_nodes:
-                    f.write(json.dumps(node, ensure_ascii=False, separators=(",", ":")) + "\n")
+            from memory_os.core.repository import MemoryRepository
+            repo = MemoryRepository(self.storage, self.config)
+            for node in new_nodes:
+                repo.upsert_node(node)
+
+        # Emit contains edges: cluster -> existing MemoryNodes whose evidence overlaps
+        # cluster files.
+        edges_path = self.config.memory_dir / "edges.jsonl"
+        existing_edges = self.storage.load_jsonl(edges_path) if edges_path.exists() else []
+        existing_edge_pairs: Set[Tuple[str, str]] = {
+            (e["source"], e["target"]) for e in existing_edges
+        }
+        all_nodes = existing + new_nodes
+        new_edges = self.codebase_adapter.cluster_contains_edges(
+            clusters,
+            all_nodes,
+            emitted_cluster_ids,
+            existing_edge_pairs,
+        )
+
+        if new_edges:
+            from memory_os.core.repository import MemoryRepository
+            repo = MemoryRepository(self.storage, self.config)
+            for edge in new_edges:
+                repo.upsert_edge(edge)
+
+        # Background: re-wire new cluster nodes into the graph via Stage-0 inference.
+        if new_nodes:
+            import threading as _t
+            from memory_os.core.config import MemoryOSConfig as _Cfg
+            try:
+                from memory_os.agent_brain.executors import _background_link_infer
+                _t.Thread(target=_background_link_infer, args=(self.config,), daemon=True).start()
+            except Exception as _e:
+                import sys as _sys
+                print(f'Ignored exception: {_e}', file=_sys.stderr)

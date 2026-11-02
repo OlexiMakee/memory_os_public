@@ -111,6 +111,8 @@ class AuditorManager:
 
     def shutdown(self):
         self._running = False
+        if hasattr(self, "_thread") and self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
 
     def _worker_loop(self):
         while self._running:
@@ -132,8 +134,9 @@ class AuditorManager:
                             aud.state = "idle"
                             aud.log(f"Error: {str(e)}")
                             
-            except Exception:
-                pass
+            except Exception as _e:
+                import sys as _sys
+                print(f'Ignored exception: {_e}', file=_sys.stderr)
             time.sleep(0.5)
 
 # Example Mock Auditors for testing the UI

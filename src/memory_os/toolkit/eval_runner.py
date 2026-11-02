@@ -4,12 +4,34 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from memory_os.core.config import MemoryOSConfig
+from memory_os.core.core import MemoryOS
+from memory_os.core.repository import MemoryRepository
+from memory_os.core.storage import FileSystemMemoryStorage
 from memory_os.modules.search import MemorySearcher
 
 
 EVALS_DIR = Path(__file__).resolve().parent / "evals"
-LLM_KEY_ENV_VARS = ("GEMINI_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY")
+LLM_KEY_ENV_VARS = ("GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY")
 MAX_EVAL_FILE_BYTES = 10 * 1024 * 1024
+
+
+def _check_expected_args(expected: Dict[str, Any], actual: Dict[str, Any]) -> bool:
+    """
+    Check that actual args satisfy expected_args spec.
+
+    Each entry in expected can be:
+      "key": true         — actual must contain exactly this key
+      "label": [a, b, …]  — actual must contain at least one of the listed keys
+                            (use for synonym groups, e.g. summary/rule/fact)
+    """
+    for label, spec in expected.items():
+        if isinstance(spec, list):
+            if not any(k in actual for k in spec):
+                return False
+        else:
+            if label not in actual:
+                return False
+    return True
 
 
 class EvalRunner:
@@ -66,6 +88,34 @@ class EvalRunner:
                 pass_threshold,
                 f"unsupported local suite: {suite_name}",
             )
+
+        if kind == "agent_action":
+            if not self._has_llm_key() and not self._local_ollama_reachable():
+                return {
+                    "suite": suite_name,
+                    "kind": kind,
+                    "status": "skipped",
+                    "reason": "no LLM API key and no local Ollama reachable",
+                    "cases": [],
+                    "pass_rate": 0.0,
+                    "pass_threshold": pass_threshold,
+                    "ok": True,
+                }
+            return self._run_agent_action(suite_name, kind, pass_threshold, cases)
+
+        if kind == "responder_quality":
+            if not self._has_llm_key() and not self._local_ollama_reachable():
+                return {
+                    "suite": suite_name,
+                    "kind": kind,
+                    "status": "skipped",
+                    "reason": "no LLM API key and no local Ollama reachable",
+                    "cases": [],
+                    "pass_rate": 0.0,
+                    "pass_threshold": pass_threshold,
+                    "ok": True,
+                }
+            return self._run_responder_quality(suite_name, kind, pass_threshold, cases)
 
         if kind == "llm_judge":
             if not self._has_llm_key():
@@ -132,24 +182,29 @@ class EvalRunner:
         pass_threshold: float,
         cases: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        searcher = MemorySearcher(self.config)
+        searcher = MemorySearcher(
+            self.config,
+            repository=MemoryRepository(FileSystemMemoryStorage(), self.config, indexer=MemoryOS(self.config)),
+        )
         case_results = []
+        top_k = 5
 
         for case in cases:
             case_id = case.get("id", "")
             query = case.get("query", "")
-            expected = str(case.get("expected_node_id_substring", "")).lower()
+            expected = self._retrieval_expected_substrings(case)
+            absent = str(case.get("expect_absent_substring", "")).strip().lower()
 
-            if not query or not expected:
+            if not query or (not expected and not absent):
                 case_results.append({
                     "id": case_id,
                     "passed": False,
-                    "detail": "missing query or expected_node_id_substring",
+                    "detail": "missing query and expected retrieval assertion",
                 })
                 continue
 
             try:
-                results = searcher.search_memory(query)
+                results = searcher.search_memory(query, depth=0)[:top_k]
             except Exception as exc:
                 case_results.append({
                     "id": case_id,
@@ -158,22 +213,142 @@ class EvalRunner:
                 })
                 continue
 
-            matched = False
-            for result in results:
-                node_id = str(result.get("id", "")).lower()
-                summary = str(result.get("summary", "")).lower()
-                if expected in node_id or expected in summary:
-                    matched = True
-                    break
+            relevant_count = sum(1 for result in results if self._retrieval_result_matches(result, expected))
+            positive_matched = bool(expected) and relevant_count > 0
+            absent_matched = bool(absent) and any(self._retrieval_result_matches(result, [absent]) for result in results)
+            positive_ok = positive_matched if expected else True
+            absent_ok = not absent_matched if absent else True
+            matched = positive_ok and absent_ok
+            # Standard precision@k: relevant / returned, not relevant / k.
+            # Dividing by the fixed top_k regardless of how many results came
+            # back structurally caps precision at 1/5=0.2 for single-answer
+            # factual queries (the common case here) even when the search
+            # returns exactly the one correct node and nothing else --
+            # that's perfect precision, not 20% precision.
+            precision_at_5 = (relevant_count / len(results)) if (expected and results) else (0.0 if expected else None)
+            recall_at_5 = 1.0 if positive_matched else (0.0 if expected else None)
 
             case_results.append({
                 "id": case_id,
                 "passed": matched,
-                "detail": (
-                    f"matched expected substring {expected!r}"
-                    if matched
-                    else f"expected substring {expected!r} not found in {len(results)} results"
-                ),
+                "detail": self._retrieval_case_detail(expected, absent, positive_matched, absent_matched, top_k),
+                "recall_at_5": recall_at_5,
+                "precision_at_5": precision_at_5,
+                "expected_any": expected,
+                "expect_absent_substring": absent,
+            })
+
+        pass_rate = self._pass_rate(case_results)
+        positive_results = [case for case in case_results if case.get("recall_at_5") is not None]
+        recall_at_5 = (
+            sum(float(case.get("recall_at_5", 0.0)) for case in positive_results) / len(positive_results)
+            if positive_results else 0.0
+        )
+        precision_at_5 = (
+            sum(float(case.get("precision_at_5", 0.0)) for case in positive_results) / len(positive_results)
+            if positive_results else 0.0
+        )
+        return {
+            "suite": suite_name,
+            "kind": kind,
+            "status": "ok",
+            "cases": case_results,
+            "metric": f"recall@{top_k}/precision@{top_k}",
+            "recall_at_5": recall_at_5,
+            "precision_at_5": precision_at_5,
+            "pass_rate": pass_rate,
+            "pass_threshold": pass_threshold,
+            "ok": pass_rate >= pass_threshold,
+        }
+
+    def _retrieval_expected_substrings(self, case: Dict[str, Any]) -> List[str]:
+        expected_any = case.get("expected_any")
+        expected: List[str] = []
+        if isinstance(expected_any, list):
+            expected.extend(str(item).strip().lower() for item in expected_any if str(item).strip())
+        legacy = str(case.get("expected_node_id_substring", "")).strip().lower()
+        if legacy:
+            expected.append(legacy)
+        return list(dict.fromkeys(expected))
+
+    @staticmethod
+    def _retrieval_result_matches(result: Dict[str, Any], expected: List[str]) -> bool:
+        if not expected:
+            return False
+        text = " ".join([
+            str(result.get("id", "")),
+            str(result.get("summary", "")),
+        ]).lower()
+        return any(item in text for item in expected)
+
+    @staticmethod
+    def _retrieval_case_detail(
+        expected: List[str],
+        absent: str,
+        positive_matched: bool,
+        absent_matched: bool,
+        top_k: int,
+    ) -> str:
+        parts = []
+        if expected:
+            parts.append(
+                f"matched one of {expected!r}"
+                if positive_matched
+                else f"expected one of {expected!r} not found in top {top_k} results"
+            )
+        if absent:
+            parts.append(
+                f"absent substring {absent!r} not found in top {top_k} results"
+                if not absent_matched
+                else f"absent substring {absent!r} unexpectedly found in top {top_k} results"
+            )
+        return "; ".join(parts)
+
+    def _run_agent_action(
+        self,
+        suite_name: str,
+        kind: str,
+        pass_threshold: float,
+        cases: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        The eval gate the candidate-LoRA promote/reject loop depends on
+        (see lora/registry.py AdapterRegistry.promote/reject): does the
+        currently configured ActionBrain pick the right action and return
+        parseable JSON for each fixture task? Today this exercises whatever
+        local-first provider is configured (no trained action-LoRA yet);
+        once one exists, point its Ollama tag at --model and re-run the
+        same suite to compare against a baseline result via 'eval compare'.
+        """
+        from memory_os.agent_brain.brain import LocalLLMActionBrain
+        from memory_os.agent_brain.vocabulary import default_memory_os_vocabulary
+
+        brain = LocalLLMActionBrain()
+        vocabulary = default_memory_os_vocabulary()
+        case_results = []
+
+        for case in cases:
+            case_id = case.get("id", "")
+            task = case.get("task", "")
+            expected_action = case.get("expected_action", "")
+
+            try:
+                request = brain.propose_action(task, vocabulary)
+            except Exception as exc:
+                case_results.append({
+                    "id": case_id,
+                    "passed": False,
+                    "detail": f"propose_action failed: {exc}",
+                })
+                continue
+
+            passed = request.action == expected_action
+            if "expected_args" in case:
+                passed = passed and _check_expected_args(case["expected_args"], request.args or {})
+            case_results.append({
+                "id": case_id,
+                "passed": passed,
+                "detail": f"got action {request.action!r}, expected {expected_action!r}",
             })
 
         pass_rate = self._pass_rate(case_results)
@@ -186,6 +361,94 @@ class EvalRunner:
             "pass_threshold": pass_threshold,
             "ok": pass_rate >= pass_threshold,
         }
+
+    def _run_responder_quality(
+        self,
+        suite_name: str,
+        kind: str,
+        pass_threshold: float,
+        cases: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Checks that LocalLLMResponder generates non-empty Ukrainian responses.
+
+        Each case must provide: task, action, result_data (str or null), result_ok (bool).
+        Optional: result_error (str). The responder is called with a mock ActionResult
+        and the response is checked for basic Ukrainian language quality signals.
+        """
+        import re
+
+        from memory_os.agent_brain.responder import LocalLLMResponder
+        from memory_os.agent_brain.types import ActionResult
+        from memory_os.lora.dataset import UK_RESPONDER_SYSTEM_PROMPT
+
+        _CYRILLIC = re.compile(r"[Ѐ-ӿ]")
+        _ERROR_PREFIXES = ("Traceback ", "Error:", "AttributeError", "Exception")
+
+        responder = LocalLLMResponder(system_prompt=UK_RESPONDER_SYSTEM_PROMPT)
+        case_results = []
+
+        for case in cases:
+            case_id = case.get("id", "")
+            task = case.get("task", "")
+            action = case.get("action", "chat")
+            result_ok = bool(case.get("result_ok", True))
+            result_data = case.get("result_data") or ""
+            result_error = case.get("result_error") or ""
+
+            mock_result = ActionResult(
+                action=action,
+                ok=result_ok,
+                data=result_data if result_ok else None,
+                error=result_error if not result_ok else None,
+            )
+
+            try:
+                response = responder.respond(task, mock_result)
+            except Exception as exc:
+                case_results.append({
+                    "id": case_id,
+                    "passed": False,
+                    "detail": f"responder raised: {exc}",
+                })
+                continue
+
+            if not response or not response.strip():
+                case_results.append({"id": case_id, "passed": False, "detail": "empty response"})
+                continue
+            if len(response.strip()) < 10:
+                case_results.append({"id": case_id, "passed": False, "detail": f"response too short ({len(response)} chars)"})
+                continue
+            if len(response.strip()) > 800:
+                case_results.append({"id": case_id, "passed": False, "detail": f"response too long ({len(response)} chars)"})
+                continue
+            if response.startswith(_ERROR_PREFIXES):
+                case_results.append({"id": case_id, "passed": False, "detail": "response looks like an error/traceback"})
+                continue
+            cyrillic_count = len(_CYRILLIC.findall(response))
+            if cyrillic_count < 3:
+                case_results.append({"id": case_id, "passed": False, "detail": f"too few Cyrillic chars ({cyrillic_count})"})
+                continue
+            case_results.append({"id": case_id, "passed": True, "detail": f"ok, {len(response)} chars, {cyrillic_count} Cyrillic"})
+
+        pass_rate = self._pass_rate(case_results)
+        return {
+            "suite": suite_name,
+            "kind": kind,
+            "status": "ok",
+            "cases": case_results,
+            "pass_rate": pass_rate,
+            "pass_threshold": pass_threshold,
+            "ok": pass_rate >= pass_threshold,
+        }
+
+    def _local_ollama_reachable(self) -> bool:
+        import os
+
+        from memory_os.core.llm_service import _discover_ollama_model
+
+        host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+        return _discover_ollama_model(host) is not None
 
     def _load_suite_config(self, suite_dir: Path) -> Dict[str, Any]:
         path = suite_dir / "config.json"

@@ -6,6 +6,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/3d-force-graph@1.80.0/dist/3d-force-graph.min.js"></script>
+  <script src="https://unpkg.com/force-graph@1.49.5/dist/force-graph.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -29,6 +30,10 @@
         </div>
         <div style="display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.2); padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
           <button id="btn-draw-edge" onclick="toggleDrawEdgeMode()" style="background: transparent; color: var(--text-muted); border: none; cursor: pointer; font-size: 12px; padding: 2px;" title="Toggle Draw Edge Mode"><i class="fa-solid fa-link"></i></button>
+          <div id="dim-toggle" style="display:inline-flex; border:1px solid rgba(255,255,255,0.15); border-radius:4px; overflow:hidden;">
+            <button id="btn-mode-2d" onclick="switchGraphMode('2d')" style="background:transparent; color:var(--text-muted); border:none; cursor:pointer; font-size:10px; font-weight:600; padding:3px 7px;" title="2D view">2D</button>
+            <button id="btn-mode-3d" onclick="switchGraphMode('3d')" style="background:transparent; color:var(--text-muted); border:none; cursor:pointer; font-size:10px; font-weight:600; padding:3px 7px;" title="3D view">3D</button>
+          </div>
         </div>
       </div>
       <p class="subtitle" style="margin-top: 4px;">Interactive Knowledge Graph Visualizer</p>
@@ -41,7 +46,15 @@
         <i class="fa-solid fa-xmark"></i>
       </button>
     </div>
-    
+    <div style="display:flex; gap:6px; margin-top:4px;">
+      <button onclick="openTasksPanel()" style="background:rgba(99,102,241,0.15); border:1px solid rgba(99,102,241,0.3); color:#a5b4fc; border-radius:4px; cursor:pointer; padding:5px 10px; font-size:11px; flex:1; pointer-events:auto;">
+        <i class="fa-solid fa-list-check"></i> Tasks
+      </button>
+      <button onclick="openMemoryPanel()" style="background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.3); color:#6ee7b7; border-radius:4px; cursor:pointer; padding:5px 10px; font-size:11px; flex:1; pointer-events:auto;">
+        <i class="fa-solid fa-brain"></i> Memory
+      </button>
+    </div>
+
     <div class="metrics-grid">
       <div class="metric-card">
         <div id="node-count" class="metric-value">0</div>
@@ -371,6 +384,57 @@
       <div id="file-viewer-content" class="file-viewer-content">
         <!-- Content dynamically injected here -->
       </div>
+    </div>
+  </div>
+
+  <!-- TASKS PANEL OVERLAY -->
+  <div id="tasks-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:100; overflow:auto; padding:20px;" onclick="closeTasksPanel()">
+    <div class="glass-panel" style="max-width:900px; margin:40px auto; padding:24px; pointer-events:auto;" onclick="event.stopPropagation()">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h2 style="margin:0; font-size:16px;"><i class="fa-solid fa-list-check"></i> Task Queue</h2>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <select id="task-status-filter" onchange="fetchTasks()" style="background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.2); padding:4px 8px; border-radius:4px; font-size:12px;">
+            <option value="">All</option>
+            <option value="pending">Pending</option>
+            <option value="running">Running</option>
+            <option value="blocked">Blocked</option>
+            <option value="done">Done</option>
+          </select>
+          <button onclick="fetchTasks()" style="background:rgba(99,102,241,0.2); border:1px solid rgba(99,102,241,0.3); color:#a5b4fc; border-radius:4px; cursor:pointer; padding:5px 10px; font-size:11px;"><i class="fa-solid fa-rotate"></i></button>
+          <button onclick="closeTasksPanel()" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:16px;"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+      <div id="tasks-count" style="font-size:11px; color:var(--text-muted); margin-bottom:12px;"></div>
+      <div id="tasks-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+    </div>
+  </div>
+
+  <div id="memory-overlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.6); z-index:100; overflow:auto; padding:20px;" onclick="closeMemoryPanel()">
+    <div class="glass-panel" style="max-width:900px; margin:40px auto; padding:24px; pointer-events:auto;" onclick="event.stopPropagation()">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h2 style="margin:0; font-size:16px;"><i class="fa-solid fa-brain"></i> Memory Timeline</h2>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <select id="memory-type-filter" onchange="fetchMemoryTimeline()" style="background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.2); padding:4px 8px; border-radius:4px; font-size:12px;">
+            <option value="">All types</option>
+            <option value="fact">fact</option>
+            <option value="rule">rule</option>
+            <option value="policy">policy</option>
+            <option value="strategy">strategy</option>
+            <option value="comm">comm</option>
+          </select>
+          <select id="memory-days-filter" onchange="fetchMemoryTimeline()" style="background:rgba(0,0,0,0.3); color:#fff; border:1px solid rgba(255,255,255,0.2); padding:4px 8px; border-radius:4px; font-size:12px;">
+            <option value="7">7d</option>
+            <option value="30" selected>30d</option>
+            <option value="90">90d</option>
+            <option value="365">1y</option>
+          </select>
+          <a href="/api/memory/export" download="memory_export.json" style="background:rgba(16,185,129,0.2); border:1px solid rgba(16,185,129,0.3); color:#6ee7b7; border-radius:4px; cursor:pointer; padding:5px 10px; font-size:11px; text-decoration:none;" title="Export graph JSON"><i class="fa-solid fa-download"></i></a>
+          <button onclick="fetchMemoryTimeline()" style="background:rgba(99,102,241,0.2); border:1px solid rgba(99,102,241,0.3); color:#a5b4fc; border-radius:4px; cursor:pointer; padding:5px 10px; font-size:11px;"><i class="fa-solid fa-rotate"></i></button>
+          <button onclick="closeMemoryPanel()" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:16px;"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+      <div id="memory-count" style="font-size:11px; color:var(--text-muted); margin-bottom:12px;"></div>
+      <div id="memory-timeline-list" style="display:flex; flex-direction:column; gap:14px;"></div>
     </div>
   </div>
 

@@ -5,6 +5,7 @@ from datetime import datetime
 import time
 
 from memory_os import MemoryOS
+from memory_os.core.llm_json import strip_json_code_fence
 from memory_os.core.llm_service import DefaultLlmProviderService
 from memory_os.core.config import MemoryOSConfig
 
@@ -96,17 +97,9 @@ class OSPerformanceAnalyzer:
             raw_response = self.llm.call_llm(
                 user_message=f"Local Digest Data:\n{digest}",
                 system_prompt=ADVISOR_PROMPT,
-                provider="gemini",  # Fast and reliable
-                model=""
             )
             
-            # Clean JSON
-            if raw_response.startswith("```json"):
-                raw_response = raw_response[7:-3].strip()
-            elif raw_response.startswith("```"):
-                raw_response = raw_response[3:-3].strip()
-                
-            result = json.loads(raw_response)
+            result = json.loads(strip_json_code_fence(raw_response))
             proposals = result.get("proposals", [])
             
             # Save to admin proposals

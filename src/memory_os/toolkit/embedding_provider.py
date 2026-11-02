@@ -54,7 +54,7 @@ class EmbeddingProvider:
     ):
         self.config = config
         self.model  = model
-        self.guard  = guard or ResourceGuard()
+        self.guard  = guard or ResourceGuard(config=config)
         self._cache_path: Optional[Path] = (
             Path(config.memory_dir) / CACHE_FILENAME if config else None
         )
@@ -85,18 +85,66 @@ class EmbeddingProvider:
         with open(self._cache_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    def invalidate_embeddings(self, node_ids: List[str] | Set[str]) -> None:
+        """Remove embedding cache entries for the given node IDs."""
+        if not self._cache_path or not self._cache_path.exists():
+            return
+        node_ids_set = set(node_ids)
+        lines = []
+        with open(self._cache_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line_stripped = line.strip()
+                if not line_stripped:
+                    continue
+                try:
+                    entry = json.loads(line_stripped)
+                    if entry.get("id") not in node_ids_set:
+                        lines.append(line)
+                except Exception as _e:
+                    import sys as _sys
+                    print(f'Ignored exception: {_e}', file=_sys.stderr)
+        with open(self._cache_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+
     # ------------------------------------------------------------------
     # Embedding
     # ------------------------------------------------------------------
 
     def _embed(self, text: str) -> Optional[List[float]]:
-        """Call Ollama library for a single embedding. Returns None on failure."""
+        """Embed text via llama-server /embedding or Ollama HTTP API (stdlib urllib)."""
+        import json
+        import os
+        import urllib.request
+
+        llama_server_url = os.environ.get("LLAMA_SERVER_URL")
+        if llama_server_url:
+            url = f"{llama_server_url.rstrip('/')}/embedding"
+            payload = json.dumps({"content": text}).encode("utf-8")
+        else:
+            host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+            url = f"{host}/api/embeddings"
+            payload = json.dumps({"model": self.model, "prompt": text}).encode("utf-8")
+
         try:
-            import ollama  # already in project dependencies
-            response = ollama.embeddings(model=self.model, prompt=text)
-            return response.get("embedding") or response.get("embeddings")
+            req = urllib.request.Request(
+                url, data=payload, headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=30.0) as resp:
+                result = json.loads(resp.read())
+
+            if isinstance(result, list) and len(result) > 0:
+                vec = result[0].get("embedding")
+            elif isinstance(result, dict):
+                vec = result.get("embedding") or result.get("embeddings")
+            else:
+                vec = None
+
+            if isinstance(vec, list) and len(vec) > 0 and isinstance(vec[0], list):
+                vec = vec[0]
+
+            return vec if isinstance(vec, list) else None
         except Exception as exc:
-            logger.warning(f"[EmbeddingProvider] Ollama call failed: {exc}")
+            logger.warning(f"[EmbeddingProvider] Embedding call failed: {exc}")
             return None
 
     def embed_nodes(self, nodes: List[dict]) -> Dict[str, List[float]]:

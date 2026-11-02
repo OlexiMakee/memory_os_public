@@ -1,0 +1,5 @@
+{
+  "kind": "responder_quality",
+  "pass_threshold": 0.70,
+  "description": "Checks that the configured LocalLLMResponder produces non-empty Ukrainian replies for a fixture set of tasks and action results. Passes if response: is non-empty, contains Cyrillic characters, fits within length bounds, and does not start with an error/traceback marker. Skips cleanly when no LLM provider is reachable."
+}

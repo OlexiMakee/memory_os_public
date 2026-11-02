@@ -1,0 +1,10 @@
+{"id": "greeting-hello", "task": "Привіт!", "action": "chat", "result_data": "", "result_ok": true}
+{"id": "capability-what-can-you-do", "task": "Що ти вмієш?", "action": "chat", "result_data": "", "result_ok": true}
+{"id": "search-found-results", "task": "Знайди нотатки про LoRA тренування", "action": "memory.search", "result_data": "Found 3 nodes: [training venv uses Python 3.12 | unsloth re-pins torch to cu128 | action_router v002 pass_rate=0.80]", "result_ok": true}
+{"id": "search-no-results", "task": "Знайди нотатки про Telegram адаптер", "action": "memory.search", "result_data": "No results found.", "result_ok": true}
+{"id": "write-success", "task": "Запам'ятай правило: завжди запускати тести перед комітом", "action": "memory.write", "result_data": "Memory node draft created: node_001 (status=draft, type=rule)", "result_ok": true}
+{"id": "write-error-empty", "task": "Збережи порожню нотатку", "action": "memory.write", "result_data": null, "result_ok": false, "result_error": "summary field is empty"}
+{"id": "file-read-success", "task": "Покажи README.md", "action": "file.read", "result_data": "File content (README.md, 847 bytes): # Memory OS\nLocal-first persistent memory graph...", "result_ok": true}
+{"id": "file-read-error", "task": "Прочитай файл що не існує", "action": "file.read", "result_data": null, "result_ok": false, "result_error": "file not found: nonexistent.md"}
+{"id": "out-of-scope-weather", "task": "Яка погода в Києві?", "action": "chat", "result_data": "", "result_ok": true}
+{"id": "short-command-ok", "task": "Зрозумів?", "action": "chat", "result_data": "", "result_ok": true}

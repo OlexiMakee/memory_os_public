@@ -1,16 +1,16 @@
 from memory_os.core.logger import get_logger
 logger = get_logger(__name__)
-import json
-import hashlib
-from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Set, Any, Tuple, Optional
+from typing import List, Dict, Set, Any, Optional
 
-from memory_os.core.interfaces import IMemoryOSConfig, IMemoryStorage
+from memory_os.core.interfaces import IMemoryOSConfig
 from memory_os.core.repository import MemoryRepository
 from memory_os.core.config import MemoryOSConfig
-from memory_os.core.safe_id import validate_safe_node_id
+from memory_os.core.node_stats import NodeStatsStore
 from memory_os.core.storage import FileSystemMemoryStorage
+from memory_os.core.timecode import now_local_iso
+
+PROMOTABLE_NODE_TYPES = frozenset({"rule", "fact", "variable", "connector", "config", "policy", "module_cluster"})
 
 class LifecycleManager:
     """Manages the lifecycle operations of Memory OS files (propose, transition, manifest, prune)."""
@@ -24,17 +24,43 @@ class LifecycleManager:
         self.storage = FileSystemMemoryStorage()
         self.repository = repository or MemoryRepository(self.storage, self.config)
 
+    def _apply_graph_patch(self, patch: Any, events: Optional[List[Dict[str, Any]]] = None) -> bool:
+        from memory_os.core.patch import RelationPatchStore
+        patch_store = RelationPatchStore(self.repository)
+        patch_id = patch_store.propose(patch)
+        return patch_store.apply(patch_id, events=events)
+
+    def _upsert_node_via_patch(self, node: Dict[str, Any], events: Optional[List[Dict[str, Any]]] = None) -> bool:
+        patch = self.repository._make_patch(
+            operation="upsert_node",
+            target=node.get("id", ""),
+            patch_type=node.get("type", "fact"),
+            confidence=float(node.get("confidence", 1.0) or 1.0),
+            evidence=node.get("evidence", []),
+            payload={"node": dict(node)},
+            reason=f"lifecycle upsert node {node.get('id', '')}",
+        )
+        return self._apply_graph_patch(patch, events=events)
+
+    def _replace_nodes_via_patch(
+        self,
+        nodes: List[Dict[str, Any]],
+        events: Optional[List[Dict[str, Any]]] = None,
+        reason: str = "lifecycle replace nodes",
+    ) -> bool:
+        patch = self.repository._make_patch(
+            operation="replace_nodes",
+            target="memory/nodes.jsonl",
+            payload={"nodes": [dict(node) for node in nodes]},
+            reason=reason,
+        )
+        return self._apply_graph_patch(patch, events=events)
+
     def _sha256_file(self, path: Path) -> str:
         return self.storage.get_sha256(path)
 
     def _load_jsonl(self, path: Path) -> List[Dict[str, Any]]:
         return self.storage.load_jsonl(path)
-
-    def _write_jsonl(self, path: Path, items: List[Dict[str, Any]]) -> None:
-        self.storage.save_jsonl(path, items)
-
-    def _append_jsonl(self, path: Path, item: Dict[str, Any]) -> None:
-        self.storage.append_jsonl(path, item)
 
     def _validate_evidence(self, evidence_list: List[str]) -> bool:
         for item in evidence_list:
@@ -43,9 +69,14 @@ class LifecycleManager:
                     return False
         return True
 
+    def _confidence_threshold(self, min_confidence: Optional[float] = None) -> float:
+        if min_confidence is not None:
+            return float(min_confidence)
+        return float(self.config.confidence_threshold)
+
     def propose(self, node_id: str, node_type: str, summary: str, evidence: str,
                 related_nodes: Optional[str] = None, validator: Optional[str] = None,
-                tags: Optional[str] = None) -> int:
+                tags: Optional[str] = None, confidence: float = 1.0) -> int:
         nodes_file = self.config.memory_dir / "nodes.jsonl"
         events_file = self.config.memory_dir / "events.jsonl"
 
@@ -65,17 +96,20 @@ class LifecycleManager:
             "summary": summary,
             "evidence": evidence_list,
             "status": "draft",
-            "freshness": datetime.now().isoformat(timespec="seconds"),
+            "freshness": now_local_iso(self.config),
             "trust": "unverified",
             "related_nodes": related,
             "tags": tag_list,
+            "confidence": float(confidence),
         }
 
-        self._append_jsonl(nodes_file, new_node)
+        if not self._upsert_node_via_patch(new_node):
+            logger.info(f"ERROR: Failed to propose node '{node_id}'.")
+            return 1
         logger.info(f"INFO: Proposed node '{node_id}' added as draft.")
 
         new_event = {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "timestamp": now_local_iso(self.config),
             "event": "memory.node.proposed",
             "node_id": node_id,
             "claim": f"Propose rule/fact: {summary}",
@@ -83,13 +117,130 @@ class LifecycleManager:
             "validator": validator or "cli_proposer",
             "status": "pending"
         }
-        self._append_jsonl(events_file, new_event)
+        self.repository.emit_event(new_event)
         return 0
 
-    def transition(self, validator: Optional[str] = None) -> int:
+    def propose_candidate(
+        self,
+        node_id: str,
+        node_type: str,
+        summary: str,
+        evidence: str | List[str],
+        confidence: float,
+        related_nodes: Optional[str | List[str]] = None,
+        validator: Optional[str] = None,
+        tags: Optional[str | List[str]] = None,
+    ) -> int:
+        evidence_text = ",".join(evidence) if isinstance(evidence, list) else evidence
+        related_text = ",".join(related_nodes) if isinstance(related_nodes, list) else related_nodes
+        tag_text = ",".join(tags) if isinstance(tags, list) else tags
+        return self.propose(
+            node_id=node_id,
+            node_type=node_type,
+            summary=summary,
+            evidence=evidence_text,
+            related_nodes=related_text,
+            validator=validator or "candidate_proposer",
+            tags=tag_text,
+            confidence=confidence,
+        )
+
+    def _candidate_rejection(self, node: Dict[str, Any], min_confidence: float) -> Optional[str]:
+        if not node.get("id") or not node.get("summary") or node.get("type") not in PROMOTABLE_NODE_TYPES:
+            return "schema violation"
+        evidence = node.get("evidence") or []
+        if not isinstance(evidence, list) or not self._validate_evidence(evidence):
+            return "missing evidence"
+        confidence = float(node.get("confidence", 1.0) or 1.0)
+        if confidence < min_confidence:
+            return f"confidence {confidence:.2f} below threshold {min_confidence:.2f}"
+        return None
+
+    def _close_pending_proposal(self, events: List[Dict[str, Any]], node_id: str, status: str, suffix: str = "") -> None:
+        for ev in events:
+            if ev.get("node_id") == node_id and ev.get("event") == "memory.node.proposed" and ev.get("status") == "pending":
+                ev["status"] = status
+                if suffix:
+                    ev["claim"] = f"{ev.get('claim', '')} {suffix}".strip()
+
+    def promote(self, node_id: str, validator: Optional[str] = None) -> int:
+        nodes_file = self.config.memory_dir / "nodes.jsonl"
+        events_file = self.config.memory_dir / "events.jsonl"
+        nodes = self._load_jsonl(nodes_file)
+        events = self._load_jsonl(events_file)
+        now_str = now_local_iso(self.config)
+
+        for node in nodes:
+            if node.get("id") != node_id:
+                continue
+            rejection = self._candidate_rejection(node, min_confidence=0.0)
+            if rejection:
+                logger.info(f"INFO: Refusing explicit promote for node '{node_id}': {rejection}.")
+                return 1
+            node["status"] = "verified"
+            node["trust"] = "verified"
+            node["freshness"] = now_str
+            if not node.get("valid_from"):
+                node["valid_from"] = now_str
+            self._close_pending_proposal(events, node_id, "accepted", "[Explicitly promoted]")
+            new_events = [{
+                "timestamp": now_str,
+                "event": "memory.node.verified",
+                "node_id": node_id,
+                "claim": f"Explicitly promoted node: {node.get('summary', '')}",
+                "evidence": node.get("evidence", []),
+                "validator": validator or "lifecycle_manager",
+                "status": "accepted",
+                "promotion_mode": "explicit",
+            }]
+            if not self._replace_nodes_via_patch(nodes, events=new_events, reason=f"explicit promote node {node_id}"):
+                logger.info(f"ERROR: Failed to promote node '{node_id}'.")
+                return 1
+            patch_events = self.repository.get_events()[len(events):]
+            self.repository.replace_events(events + patch_events)
+            self._export_verified_node(node)
+            return 0
+        logger.info(f"ERROR: Node '{node_id}' not found.")
+        return 1
+
+    def reject(self, node_id: str, reason: str = "", validator: Optional[str] = None) -> int:
+        nodes_file = self.config.memory_dir / "nodes.jsonl"
+        events_file = self.config.memory_dir / "events.jsonl"
+        nodes = self._load_jsonl(nodes_file)
+        events = self._load_jsonl(events_file)
+        now_str = now_local_iso(self.config)
+
+        for node in nodes:
+            if node.get("id") != node_id:
+                continue
+            node["status"] = "stale"
+            node["freshness"] = now_str
+            node["valid_until"] = now_str
+            suffix = f"[Rejected: {reason}]" if reason else "[Rejected]"
+            self._close_pending_proposal(events, node_id, "rejected", suffix)
+            new_events = [{
+                "timestamp": now_str,
+                "event": "memory.node.rejected",
+                "node_id": node_id,
+                "claim": reason or f"Rejected node: {node.get('summary', '')}",
+                "evidence": node.get("evidence", []),
+                "validator": validator or "lifecycle_manager",
+                "status": "accepted",
+            }]
+            if not self._replace_nodes_via_patch(nodes, events=new_events, reason=f"reject node {node_id}"):
+                logger.info(f"ERROR: Failed to reject node '{node_id}'.")
+                return 1
+            patch_events = self.repository.get_events()[len(events):]
+            self.repository.replace_events(events + patch_events)
+            return 0
+        logger.info(f"ERROR: Node '{node_id}' not found.")
+        return 1
+
+    def transition(self, validator: Optional[str] = None, min_confidence: Optional[float] = None) -> int:
         nodes_file = self.config.memory_dir / "nodes.jsonl"
         edges_file = self.config.memory_dir / "edges.jsonl"
         events_file = self.config.memory_dir / "events.jsonl"
+        threshold = self._confidence_threshold(min_confidence)
 
         nodes = self._load_jsonl(nodes_file)
         edges = self._load_jsonl(edges_file)
@@ -102,36 +253,48 @@ class LifecycleManager:
 
         updated_nodes = []
         verified_ids: Set[str] = set()  # newly promoted in this call
+        verified_nodes: List[Dict[str, Any]] = []
         new_events = []
 
         for node in nodes:
             if node["status"] in ["draft", "observed"]:
-                if not node.get("id") or not node.get("summary") or node.get("type") not in ["rule", "fact", "variable", "connector", "config", "policy", "module_cluster"]:
-                    logger.info(f"INFO: Rejecting transition for node '{node['id']}': invalid schema.")
+                # Hard violations (schema/evidence) stale the candidate; low
+                # confidence only HOLDS it in draft — it may gain evidence later
+                # and be promoted by a future transition or explicit promote(),
+                # mirroring the AdapterRegistry candidate pattern.
+                rejection = self._candidate_rejection(node, min_confidence=0.0)
+                confidence = float(node.get("confidence", 1.0) or 1.0)
+                if rejection:
+                    logger.info(f"INFO: Rejecting transition for node '{node['id']}': {rejection}.")
                     node["status"] = "stale"
-                    for ev in events:
-                        if ev.get("node_id") == node["id"] and ev.get("event") == "memory.node.proposed" and ev.get("status") == "pending":
-                            ev["status"] = "rejected"
-                            ev["claim"] += " [Rejected: schema violation]"
-                elif not self._validate_evidence(node["evidence"]):
-                    logger.info(f"INFO: Rejecting transition for node '{node['id']}': missing evidence files.")
-                    node["status"] = "stale"
-                    for ev in events:
-                        if ev.get("node_id") == node["id"] and ev.get("event") == "memory.node.proposed" and ev.get("status") == "pending":
-                            ev["status"] = "rejected"
-                            ev["claim"] += " [Rejected: missing evidence]"
+                    now_str = now_local_iso(self.config)
+                    node["freshness"] = now_str
+                    node["valid_until"] = now_str
+                    self._close_pending_proposal(events, node["id"], "rejected", f"[Rejected: {rejection}]")
+                    new_events.append({
+                        "timestamp": now_str,
+                        "event": "memory.node.rejected",
+                        "node_id": node["id"],
+                        "claim": f"Rejected node: {rejection}",
+                        "evidence": node.get("evidence", []),
+                        "validator": validator or "lifecycle_manager",
+                        "status": "accepted",
+                    })
+                elif confidence < threshold:
+                    logger.info(
+                        f"INFO: Holding node '{node['id']}' in draft: confidence {confidence:.2f} below threshold {threshold:.2f}."
+                    )
                 else:
                     logger.info(f"INFO: Transitioning node '{node['id']}' to verified.")
                     node["status"] = "verified"
                     node["trust"] = "verified"
-                    now_str = datetime.now().isoformat(timespec="seconds")
+                    now_str = now_local_iso(self.config)
                     node["freshness"] = now_str
                     if "valid_from" not in node or not node["valid_from"]:
                         node["valid_from"] = now_str
                     verified_ids.add(node["id"])
-                    for ev in events:
-                        if ev.get("node_id") == node["id"] and ev.get("event") == "memory.node.proposed" and ev.get("status") == "pending":
-                            ev["status"] = "accepted"
+                    verified_nodes.append(node)
+                    self._close_pending_proposal(events, node["id"], "accepted")
 
                     verification_event = {
                         "timestamp": now_str,
@@ -140,12 +303,11 @@ class LifecycleManager:
                         "claim": f"Verified node: {node['summary']}",
                         "evidence": node["evidence"],
                         "validator": validator or "lifecycle_manager",
-                        "status": "accepted"
+                        "status": "accepted",
+                        "promotion_mode": "auto",
+                        "confidence_threshold": threshold,
                     }
                     new_events.append(verification_event)
-
-                    if node.get("type") == "rule":
-                        self._emit_skill_file(node)
 
             updated_nodes.append(node)
 
@@ -168,7 +330,7 @@ class LifecycleManager:
                             new_status = "superseded" if edge["type"] == "overrides" else "stale"
                             logger.info(f"INFO: Node '{target_id}' is deprecating to '{new_status}' due to edge '{edge['type']}' from '{source_id}'.")
                             n["status"] = new_status
-                            now_str = datetime.now().isoformat(timespec="seconds")
+                            now_str = now_local_iso(self.config)
                             n["freshness"] = now_str
                             n["valid_until"] = now_str
 
@@ -183,35 +345,28 @@ class LifecycleManager:
                             }
                             new_events.append(dep_event)
 
-        self._write_jsonl(nodes_file, updated_nodes)
-        self._write_jsonl(events_file, events + new_events)
+        original_event_count = len(events)
+        if not self._replace_nodes_via_patch(updated_nodes, events=new_events, reason="lifecycle transition nodes"):
+            logger.error("ERROR: Transition failed while applying node patch.")
+            return 1
+        patch_events = self.repository.get_events()[original_event_count:]
+        self.repository.replace_events(events + patch_events)
+        for node in verified_nodes:
+            self._export_verified_node(node)
         logger.info("INFO: Transition processing completed.")
         return 0
 
-    def _emit_skill_file(self, node: Dict[str, Any]) -> None:
-        try:
-            validate_safe_node_id(node["id"])
-        except ValueError as exc:
-            # Defense in depth: a node this unsafe should already be rejected
-            # by EvolutionGate/MemoryValidator, but skip rather than write
-            # outside .claude/skills/ if one slips through.
-            logger.error(f"Refusing to emit skill file for unsafe node id {node.get('id')!r}: {exc}")
-            return
-        skills_dir = self.config.root_dir / ".claude" / "skills"
-        skills_dir.mkdir(parents=True, exist_ok=True)
-        skill_path = skills_dir / f"{node['id']}.md"
-        summary = node.get("summary", "")
-        if not isinstance(summary, str):
-            summary = str(summary)
-        lines = [f"# {node['id']}", "", summary, ""]
-        evidence = node.get("evidence", [])
-        if evidence:
-            lines += ["**Evidence:**"] + [f"- {ev}" for ev in evidence] + [""]
-        tags = node.get("tags", [])
-        if tags:
-            lines.append(f"**Tags:** {', '.join(tags)}")
-        skill_path.write_text("\n".join(lines), encoding="utf-8")
-        logger.info(f"INFO: Emitted skill file: {skill_path.name}")
+    def _export_verified_node(self, node: Dict[str, Any]) -> None:
+        from memory_os.modules.exporter import PolyglotExporter
+
+        PolyglotExporter(self.config.root_dir).export_node(
+            node_id=node["id"],
+            node_type=node.get("type", "fact"),
+            summary=str(node.get("summary", "")),
+            evidence=list(node.get("evidence", [])),
+            status=node.get("status", "draft"),
+            globs=node.get("globs"),
+        )
 
     def manifest(self) -> int:
         nodes_file = self.config.memory_dir / "nodes.jsonl"
@@ -237,7 +392,7 @@ class LifecycleManager:
             event_statuses[ev["status"]] = event_statuses.get(ev["status"], 0) + 1
 
         manifest_data = {
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "generated_at": now_local_iso(self.config),
             "counts": {
                 "nodes": len(nodes),
                 "node_statuses": node_statuses,
@@ -279,7 +434,8 @@ class LifecycleManager:
         archived_edges_list = []
 
         for n in nodes:
-            if n["status"] in ["stale", "superseded"]:
+            pinned = "pinned" in {str(tag) for tag in n.get("tags", [])}
+            if n["status"] in ["stale", "superseded"] and not pinned:
                 logger.info(f"INFO: Pruning stale/superseded node '{n['id']}'.")
                 archived_nodes_list.append(n)
                 pruned_count += 1
@@ -300,61 +456,93 @@ class LifecycleManager:
                 archived_edges_list.append(e)
                 pruned_edges_count += 1
 
-        self._write_jsonl(nodes_file, pruned_nodes)
-        self._write_jsonl(edges_file, pruned_edges)
+        from memory_os.core.patch import RelationPatchStore
+
+        patch_store = RelationPatchStore(self.repository)
+        node_patch = self.repository._make_patch(
+            operation="replace_nodes",
+            target="memory/nodes.jsonl",
+            payload={"nodes": pruned_nodes},
+            reason="prune stale/superseded nodes",
+        )
+        edge_patch = self.repository._make_patch(
+            operation="replace_edges",
+            target="memory/edges.jsonl",
+            payload={"edges": pruned_edges},
+            reason="prune dangling edges",
+        )
+        node_patch_id = patch_store.propose(node_patch)
+        edge_patch_id = patch_store.propose(edge_patch)
+        if not patch_store.apply_many([node_patch_id, edge_patch_id]):
+            logger.error("ERROR: Prune failed while applying graph patches.")
+            return 1
         
         if archived_nodes_list:
-            archived_nodes_file = self.config.memory_dir / "archived_nodes.jsonl"
-            for an in archived_nodes_list:
-                self._append_jsonl(archived_nodes_file, an)
+            self.repository.archive_nodes(archived_nodes_list)
                 
         if archived_edges_list:
-            archived_edges_file = self.config.memory_dir / "archived_edges.jsonl"
-            for ae in archived_edges_list:
-                self._append_jsonl(archived_edges_file, ae)
+            self.repository.archive_edges(archived_edges_list)
 
         logger.info(f"INFO: Pruning finished. Archived {pruned_count} nodes and {len(archived_edges_list)} edges. Removed {pruned_edges_count - len(archived_edges_list)} invalid edges.")
         return 0
 
     def decay_nodes(self, days_stale: int = 30) -> int:
+        """Algorithmic forgetting (Ebbinghaus curve approximation).
+
+        Archives nodes that haven't been accessed recently (per node_stats.json)
+        AND are older than `days_stale`. Uses RelationPatchStore.deprecate_node
+        for auditable, reversible status transitions.
         """
-        Algorithmic forgetting (Ebbinghaus curve approximation).
-        Transitions nodes that haven't been accessed recently AND are older than `days_stale` to `archived` status.
-        """
-        from memory_os.core.core import MemoryOS
+        from datetime import datetime as _dt, timedelta as _td, timezone as _timezone
         from memory_os.core.patch import RelationPatchStore, RelationPatch
-        
-        db = MemoryOS(self.config)
-        conn = db.get_connection()
+
+        cutoff = (_dt.now(_timezone.utc) - _td(days=days_stale)).isoformat().replace("+00:00", "Z")
+
+        stats_path = self.config.memory_dir / "node_stats.json"
+        stats = NodeStatsStore(stats_path, self.storage).load()
+
+        nodes_file = self.config.memory_dir / "nodes.jsonl"
+        nodes = self._load_jsonl(nodes_file)
+
+        stale_ids = []
+        for n in nodes:
+            if n.get("status") not in ("verified", "active", "draft"):
+                continue
+            if "pinned" in {str(tag) for tag in n.get("tags", [])}:
+                continue
+            valid_from = n.get("valid_from") or n.get("freshness", "")
+            if not valid_from or valid_from >= cutoff:
+                continue  # created recently — keep
+            access_stat = stats.get(n["id"])
+            last_accessed = access_stat.last_accessed if access_stat else ""
+            if last_accessed and last_accessed >= cutoff:
+                continue  # accessed recently — keep
+            stale_ids.append(n["id"])
+
+        if not stale_ids:
+            return 0
+
+        patch_store = RelationPatchStore(self.repository)
         archived_count = 0
-        try:
-            # We select nodes that are 'active' or 'verified' but haven't been accessed recently 
-            # (or ever, if last_accessed is empty) and whose valid_from is older than days_stale
-            cursor = conn.execute(f"""
-                SELECT id FROM graph_nodes
-                WHERE status IN ('active', 'verified', 'pending')
-                  AND (last_accessed = '' OR last_accessed < datetime('now', '-{days_stale} days'))
-                  AND valid_from < datetime('now', '-{days_stale} days')
-            """)
-            stale_ids = [row[0] for row in cursor.fetchall()]
-            
-            if not stale_ids:
-                return 0
-                
-            patch_store = RelationPatchStore(self.repository)
-            for nid in stale_ids:
-                patch = RelationPatch(
-                    initiator="LifecycleManager.decay_nodes",
-                    rationale=f"Algorithmic memory decay: Node not accessed in >{days_stale} days.",
-                    upsert_nodes=[],
-                    upsert_edges=[],
-                    status_overrides={nid: "archived"},
-                    protocol_level=0
-                )
+        for nid in stale_ids:
+            patch = RelationPatch(
+                operation="deprecate_node",
+                source=nid,
+                target=nid,
+                type="fact",
+                domain="",
+                confidence=0.0,
+                evidence=[],
+                reason=f"Algorithmic decay: not accessed in >{days_stale} days (cutoff {cutoff}).",
+                created_by_protocol=0,
+                required_verification_protocol=0,
+            )
+            try:
                 patch_store.propose(patch)
                 patch_store.apply(patch.id)
                 archived_count += 1
-                
-            return archived_count
-        finally:
-            conn.close()
+            except Exception as exc:
+                logger.warning(f"[decay_nodes] Failed to archive {nid}: {exc}")
+
+        logger.info(f"[decay_nodes] Archived {archived_count} nodes (days_stale={days_stale}).")
+        return archived_count

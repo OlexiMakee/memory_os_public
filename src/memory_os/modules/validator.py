@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Iterable, Optional, Set, Tuple
 from memory_os.core.interfaces import IMemoryOSConfig, IMemoryStorage
 from memory_os.core.repository import MemoryRepository
 from memory_os.core.config import MemoryOSConfig
+from memory_os.core.models import EdgeType, NodeType
 from memory_os.core.safe_id import validate_safe_node_id
 from memory_os.core.storage import FileSystemMemoryStorage
 
@@ -28,13 +29,8 @@ from memory_os.core.storage import FileSystemMemoryStorage
 # log them to events.jsonl so failures are never silent.
 # ---------------------------------------------------------------------------
 
-VALID_NODE_TYPES: Set[str] = {
-    "rule", "fact", "variable", "connector", "config", "policy", "module_cluster",
-    "file", "class", "function", "module"
-}
-VALID_EDGE_TYPES: Set[str] = {
-    "depends_on", "triggers", "refutes", "overrides", "configures", "secures", "contains"
-}
+VALID_NODE_TYPES: Set[str] = {item.value for item in NodeType}
+VALID_EDGE_TYPES: Set[str] = {item.value for item in EdgeType}
 SUMMARY_MIN_CHARS = 20
 
 
