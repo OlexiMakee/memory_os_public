@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 
 from memory_os import MemoryOSConfig, MemoryCompactor, LifecycleManager, MemorySearcher, MemoryOS
 from memory_os.core.storage import FileSystemMemoryStorage
+from memory_os.cli_groups.util_cmds import _safe_yaml_dump
 
 UTC = timezone.utc
 def cmd_snapshot(args: argparse.Namespace, config: MemoryOSConfig) -> int:
@@ -761,7 +762,13 @@ def cmd_ingest_transcript(args: argparse.Namespace, config: MemoryOSConfig) -> i
 def cmd_search(args: argparse.Namespace, config: MemoryOSConfig) -> int:
     searcher = MemorySearcher(config)
 
-    matches = searcher.search_memory(args.query, args.depth, semantic=args.semantic)
+    matches = searcher.search_memory(
+        args.query,
+        args.depth,
+        semantic=getattr(args, "semantic", False),
+        hybrid=getattr(args, "hybrid", False),
+        all_time=getattr(args, "all_time", False),
+    )
 
     if args.json:
         print(json.dumps(matches, indent=2))
@@ -780,6 +787,11 @@ def cmd_search(args: argparse.Namespace, config: MemoryOSConfig) -> int:
                 print(f"  Summary: {node['summary']}")
                 if "match_snippet" in node:
                     print(f"  Snippet: {node['match_snippet']}")
+                if "temporal_status" in node:
+                    print(f"  Temporal Status: [{node['temporal_status'].upper()}] (valid_until={node.get('valid_until')})")
+                if "score_breakdown" in node:
+                    bd = node["score_breakdown"]
+                    print(f"  RRF Score: {bd.get('rrf')} | Lex Rank: {bd.get('lex_rank')} | Sem Rank: {bd.get('sem_rank')} | Cosine: {bd.get('cosine_sim')}")
                 print(f"  Status: {node['status']} | Trust: {node['trust']}")
                 if node.get("evidence"):
                     print(f"  Evidence: {', '.join(node['evidence'])}")

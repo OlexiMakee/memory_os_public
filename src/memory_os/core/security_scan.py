@@ -393,3 +393,66 @@ class SecurityScanner:
         redacted = re.sub(r"[a-zA-Z0-9_\-\./]*\.env[a-zA-Z0-9_\-\.]*", "[REDACTED]", redacted)
 
         return redacted.strip()
+
+
+def to_sarif(scan_result: Dict[str, Any], tool_version: str = "0.2.0") -> Dict[str, Any]:
+    """Convert a SecurityScanner.scan() result dict into a SARIF 2.1.0 report."""
+    findings = scan_result.get("findings", []) or []
+    rules_by_id: Dict[str, Dict[str, Any]] = {}
+    results: List[Dict[str, Any]] = []
+
+    for finding in findings:
+        category = str(finding.get("category", "security"))
+        pattern = str(finding.get("pattern", "unknown"))
+        rule_id = f"memory-os/{category}/{pattern}"
+        level = "error" if category == "secret" else "warning"
+
+        if rule_id not in rules_by_id:
+            rules_by_id[rule_id] = {
+                "id": rule_id,
+                "name": pattern,
+                "shortDescription": {
+                    "text": f"Memory OS {category} check: {pattern}",
+                },
+                "defaultConfiguration": {"level": level},
+                "properties": {"tags": ["security", category]},
+            }
+
+        rel_file = str(finding.get("file", "")).replace("\\", "/")
+        line_no = max(1, int(finding.get("line", 1) or 1))
+        snippet = str(finding.get("excerpt") or finding.get("snippet") or "")
+        results.append(
+            {
+                "ruleId": rule_id,
+                "level": level,
+                "message": {
+                    "text": f"Detected {category} ({pattern})" + (f": {snippet}" if snippet else ""),
+                },
+                "locations": [
+                    {
+                        "physicalLocation": {
+                            "artifactLocation": {"uri": rel_file},
+                            "region": {"startLine": line_no},
+                        }
+                    }
+                ],
+            }
+        )
+
+    return {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "Memory OS Security Scanner",
+                        "version": tool_version,
+                        "informationUri": "https://github.com/memory-os/memory-os",
+                        "rules": list(rules_by_id.values()),
+                    }
+                },
+                "results": results,
+            }
+        ],
+    }

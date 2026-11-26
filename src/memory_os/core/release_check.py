@@ -38,6 +38,53 @@ STALE_DOC_PATTERNS = (
     r"\.generate\(",
 )
 
+CLEAN_ROOM_FORBIDDEN_PATHS = (
+    # Host OS / Desktop utilities (PRODUCT_BOUNDARY.md CUT)
+    "src/memory_os/ide_grant_private.py",
+    "src/memory_os/linux_inventory.py",
+    "src/memory_os/toolkit/linux_provisioner.py",
+    "src/memory_os/toolkit/xfce_manager.py",
+    "src/memory_os/toolkit/startup_profile.py",
+    "src/memory_os/toolkit/bootstrap_installer.py",
+    # Chat bots & custom orchestrators (PRODUCT_BOUNDARY.md CUT)
+    "src/memory_os/adapters/telegram_adapter.py",
+    "src/memory_os/adapters/telegram_polling.py",
+    "src/memory_os/adapters/discord_adapter.py",
+    "src/memory_os/agent_brain",
+    # Terminal multiplexers & brittle quota scrapers (PRODUCT_BOUNDARY.md CUT)
+    "src/memory_os/toolkit/multiplexer_manager.py",
+    "src/memory_os/toolkit/agent_console_scanner.py",
+    "src/memory_os/toolkit/console_parser.py",
+    "src/memory_os/toolkit/quota_harvester.py",
+    "src/memory_os/toolkit/agent_manager.py",
+    # ML / LoRA pipelines (PRODUCT_BOUNDARY.md CUT)
+    "src/memory_os/lora",
+    "src/memory_os/toolkit/quantizer.py",
+    # Non-core third-party adapters (PRODUCT_BOUNDARY.md CUT)
+    "src/memory_os/adapters/duckdb_adapter.py",
+    "src/memory_os/adapters/qdrant_adapter.py",
+    "src/memory_os/adapters/phoenix_exporter.py",
+    "src/memory_os/adapters/langfuse_exporter.py",
+    "src/memory_os/adapters/mlflow_exporter.py",
+    "src/memory_os/adapters/temporal_adapter.py",
+    "src/memory_os/adapters/vllm_provider.py",
+    "src/memory_os/adapters/bridges",
+    "src/memory_os/adapters/markitdown_adapter.py",
+    "src/memory_os/toolkit/gdrive_sync.py",
+    # Personal/legacy artifacts & private host scripts
+    "src/memory_os/user_persona",
+    "src/memory_os/docs/encyclopedia",
+    "scripts/agy_workflow.py",
+    "scripts/start_llama_server.sh",
+)
+
+CLEAN_ROOM_FORBIDDEN_PATTERNS = (
+    r"When used inside this host project",
+    r"LLMClientFactory is resolved automatically",
+    r"/Users/[A-Za-z0-9_.-]+/",
+    r"/home/[A-Za-z0-9_.-]+/",
+)
+
 
 @dataclass
 class ReleaseCheck:
@@ -82,6 +129,7 @@ class ReleaseChecker:
         if target == "public":
             checks.extend([
                 self._check_public_private_files(),
+                self._check_public_clean_room(),
                 self._check_public_security_profiles(),
             ])
 
@@ -397,6 +445,49 @@ class ReleaseChecker:
             "public-private-files",
             not present,
             "no private planning docs present" if not present else f"private docs present in checkout: {', '.join(present)}",
+            severity="error",
+        )
+
+    def _check_public_clean_room(self) -> ReleaseCheck:
+        """Verify public release tree contains no non-core personal/host-coupled artifacts."""
+        violations: List[str] = []
+        for rel_path in CLEAN_ROOM_FORBIDDEN_PATHS:
+            if (self.config.root_dir / rel_path).exists():
+                violations.append(f"forbidden-path:{rel_path}")
+
+        scan_roots = [
+            self.config.root_dir / "pyproject.toml",
+            self.config.root_dir / "README.md",
+            self.config.root_dir / "action.yml",
+            self.config.root_dir / "docs",
+            self.config.root_dir / "src" / "memory_os",
+            self.config.root_dir / "scripts",
+            self.config.root_dir / "benchmarks",
+        ]
+        compiled = [re.compile(p) for p in CLEAN_ROOM_FORBIDDEN_PATTERNS]
+        for root in scan_roots:
+            files = [root] if root.is_file() else list(root.rglob("*")) if root.is_dir() else []
+            for path in files:
+                if not path.is_file() or path.suffix not in {".py", ".toml", ".md", ".sh", ".yml", ".yaml"}:
+                    continue
+                if path.name == "release_check.py":
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    continue
+                for pattern in compiled:
+                    if pattern.search(text):
+                        rel = path.relative_to(self.config.root_dir)
+                        violations.append(f"clean-room-pattern:{rel}:{pattern.pattern}")
+                        break
+
+        return ReleaseCheck(
+            "public-clean-room",
+            not violations,
+            "public clean-room check passed"
+            if not violations
+            else f"{len(violations)} clean-room violation(s): " + "; ".join(violations[:15]),
             severity="error",
         )
 

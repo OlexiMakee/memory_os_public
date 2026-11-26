@@ -102,3 +102,12 @@ agent_context/runtime/
 .codex/
 .gemini/
 .cursor/
+# Memory OS runtime state
+data/
+memory/*
+!memory/nodes.jsonl
+!memory/edges.jsonl
+!memory/skills.lock.json
+agent_context/task_capsules.jsonl
+agent_context/memory_snapshot.json
+agent_context/task_events.jsonl

@@ -1090,6 +1090,8 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--depth", type=int, default=1, help="Retrieval traversal recursion depth.")
     search_parser.add_argument("--json", action="store_true", help="Output raw JSON instead of human-readable text.")
     search_parser.add_argument("--semantic", action="store_true", help="Force semantic vector search instead of lexical/keyword search.")
+    search_parser.add_argument("--hybrid", action="store_true", help="Reciprocal Rank Fusion (RRF) combining lexical FTS5 and semantic vectors.")
+    search_parser.add_argument("--all-time", action="store_true", help="Include temporally expired facts (valid_until in past).")
     search_parser.set_defaults(func=cmd_search)
 
     stats_parser = subparsers.add_parser("stats", help=argparse.SUPPRESS)
@@ -1352,6 +1354,62 @@ def build_parser() -> argparse.ArgumentParser:
     release_check_parser.add_argument("--target", choices={"private", "public"}, default="private")
     release_check_parser.add_argument("--format", choices={"json", "text"}, default="text")
     release_check_parser.set_defaults(func=cmd_release_check)
+
+    from memory_os.core.licensing import handle_license_cli
+
+    license_parser = subparsers.add_parser(
+        "license",
+        help="Manage commercial license keys (Polar.sh, Paddle, Offline, Sandbox).",
+    )
+    license_parser.add_argument("--format", choices={"json", "text"}, default="text")
+    license_parser.add_argument("--sandbox", action="store_true", help="Use sandbox endpoints/keys.")
+    license_parser.set_defaults(func=handle_license_cli, license_cmd="status")
+    license_subparsers = license_parser.add_subparsers(dest="license_cmd")
+
+    lic_status = license_subparsers.add_parser("status", help="Show active license tier and enabled features.")
+    lic_status.add_argument("--format", choices={"json", "text"}, default="text")
+    lic_status.add_argument("--sandbox", action="store_true")
+    lic_status.set_defaults(func=handle_license_cli)
+
+    lic_activate = license_subparsers.add_parser("activate", help="Validate and store a license key locally.")
+    lic_activate.add_argument("key", help="License key or Paddle subscription ID.")
+    lic_activate.add_argument(
+        "--provider",
+        choices={"auto", "polar", "paddle", "offline", "offline_ed25519", "sandbox"},
+        default="auto",
+    )
+    lic_activate.add_argument("--sandbox", action="store_true")
+    lic_activate.add_argument("--format", choices={"json", "text"}, default="text")
+    lic_activate.set_defaults(func=handle_license_cli)
+
+    lic_verify = license_subparsers.add_parser("verify", help="Verify a license key without persisting it.")
+    lic_verify.add_argument("--key", default=None, help="Optional explicit key to verify.")
+    lic_verify.add_argument(
+        "--provider",
+        choices={"auto", "polar", "paddle", "offline", "offline_ed25519", "sandbox"},
+        default="auto",
+    )
+    lic_verify.add_argument("--sandbox", action="store_true")
+    lic_verify.add_argument("--no-cache", action="store_true", help="Disable offline grace cache fallback.")
+    lic_verify.add_argument("--format", choices={"json", "text"}, default="text")
+    lic_verify.set_defaults(func=handle_license_cli)
+
+    lic_deactivate = license_subparsers.add_parser("deactivate", help="Remove locally stored license key.")
+    lic_deactivate.add_argument("--format", choices={"json", "text"}, default="text")
+    lic_deactivate.set_defaults(func=handle_license_cli)
+
+    from memory_os.toolkit.mcp_installer import handle_mcp_install_cli, VALID_CLIENTS, VALID_SCOPES
+
+    mcp_install_parser = subparsers.add_parser(
+        "mcp-install",
+        help="Install Memory OS stdio MCP configuration for Claude Code, Cursor, or Codex.",
+    )
+    mcp_install_parser.add_argument("--client", required=True, choices=VALID_CLIENTS)
+    mcp_install_parser.add_argument("--scope", default="project", choices=VALID_SCOPES)
+    mcp_install_parser.add_argument("--python", default=None, help="Explicit Python interpreter path.")
+    mcp_install_parser.add_argument("--dry-run", action="store_true")
+    mcp_install_parser.add_argument("--format", choices={"text", "json"}, default="text")
+    mcp_install_parser.set_defaults(func=handle_mcp_install_cli)
 
     git_commit_safe_parser = subparsers.add_parser(
         "git-commit-safe",

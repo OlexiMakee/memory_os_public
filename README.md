@@ -1,200 +1,101 @@
 # Memory OS
 
-**Local-first development toolkit and long-term memory for LLM agents.**
+**Git-native Memory & Deterministic Verification Control Plane for AI Coding Agents (Claude Code, Cursor, Codex).**
 
-Memory OS gives your AI agent a persistent, indexed memory graph plus repeatable workflows for spec-driven planning, verification, and agent handoff quality.
+Zero mandatory external dependencies. 100% local-first. Plain-file `JSONL` ground truth + `SQLite FTS5` search + merge-blocking CI/PR Evidence Gates.
 
-> *The LLM shouldn't remember everything. It should know how to ask Memory OS.*
+---
 
-## Install
+## Why Memory OS?
 
-Full console-first workspace from GitHub:
+| Pain Point (AI Coding Agents in 2026) | Cloud Vector Memory / Noisy AI Reviewers | **Memory OS** |
+| :--- | :--- | :--- |
+| **Black-box debugging** | Cannot see why the agent hallucinated | Plain-text `memory/*.jsonl` (100% git-diffable) + `memory log / revert` |
+| **Token burn & latency** | LLM call on every memory write | Deterministic local writes + `SQLite FTS5` (0ms LLM latency) |
+| **Memory pollution** | Stale logs & junk pile up | Lifecycle (`draft -> verified`), `triage`, `prune`, `security scan` |
+| **Privacy / NDA / GDPR** | Uploads proprietary code to external SaaS | **100% Local-First** — CLI, MCP, and CI Gate run inside your own machine/runner |
+| **AI PR "First-Pass Illusion"** | Rubber-stamped PRs with no proof tests ran | **Deterministic Evidence Gate** blocks merge unless commands actually passed |
 
-```bash
-git clone https://github.com/OlexiMakee/memory_os.git
-cd memory_os
-bash scripts/bootstrap_ubuntu.sh --apt --extras dev,providers-ollama,resource-psutil
-```
+---
 
-Agent handoff for a clean Linux server: [AGENT_DEPLOY.md](AGENT_DEPLOY.md).
-
-Package-only install:
-
-```bash
-pip install git+https://github.com/OlexiMakee/memory_os_public.git
-```
-
-Or clone and install locally:
+## 60-Second Quickstart
 
 ```bash
-git clone https://github.com/OlexiMakee/memory_os_public.git
-cd memory_os_public
-pip install -e .
+# 1. Install (Python 3.9+, zero mandatory dependencies)
+pip install memory-os
+
+# 2. Initialize plain-file memory & spec structure in your repo
+memory-os init
+
+# 3. Connect stdio MCP to Claude Code, Cursor, or Codex in 1 command
+memory-os mcp-install --client claude
+memory-os mcp-install --client cursor
+memory-os mcp-install --client codex
 ```
 
-## Quickstart (5 minutes)
+### Core Daily Workflow
 
 ```bash
-# 1. Initialize Memory OS in your project root
-cd your-project/
-memory_os init
+# Search project memory & codebase symbols
+memory-os search "authentication"
 
-# 2. Verify everything is wired up
-memory_os validate
+# Record an architectural fact or policy
+memory-os memory write --type fact --summary "Use SQLite WAL mode for local index"
+memory-os sync
 
-# 3. Sync memory to the search index
-memory_os sync
+# Enforce deterministic command evidence before marking a task done
+memory-os evidence init --task feat-auth --risk-class medium
+memory-os evidence add-command --task feat-auth -- pytest -q
+memory-os evidence verify --task feat-auth
 
-# 4. Search memory
-memory_os search "authentication"
-
-# 5. Review and approve draft memory nodes
-memory_os triage
+# Run local security & hygiene checks
+memory-os security scan
+memory-os doctor
 ```
 
-## Core Commands
+---
 
-| Command | What it does |
-|---|---|
-| `init` | Create memory files and config in current directory |
-| `validate` | Check that memory files and capsules are valid |
-| `sync` | Sync `memory/nodes.jsonl` → SQLite FTS5 index |
-| `search <query>` | Keyword search across memory nodes |
-| `snapshot` | Build a compact memory snapshot for agent context |
-| `spec init <title>` | Create spec/plan/tasks/checklist files for a feature |
-| `spec analyze [id]` | Validate spec quality gates and traceability |
-| `spec constitution` | Install project development principles |
-| `compact` | Extract new memory nodes from task capsules via LLM |
-| `compress` | Semantically merge duplicate memory nodes |
-| `prune` | Archive stale and superseded nodes |
-| `transition` | Promote draft nodes through lifecycle states |
-| `review` | List draft nodes pending approval |
-| `approve <id>` | Approve a draft node |
-| `triage` | Interactive review of draft nodes |
-| `query` | Filter nodes by type, status, trust, tag, date |
-| `backlinks <id>` | Show all nodes that reference a given node |
-| `memory log [--node <id>]` / `memory show <id>` / `memory revert <id>` | "Git log"/"git show"/rollback for the memory graph over `events.jsonl`/`archived_nodes.jsonl` — no new storage format. See `src/memory_os/docs/encyclopedia/roadmap.md` (Git Memory Chain evaluation). |
-| `audit` | Audit control-plane state |
+## CI/PR Verification Gate (GitHub Action)
 
-## Engineering Control Plane
+Block AI-generated pull requests that lack verified command evidence, leak secrets, or exceed blast-radius limits — **running 100% inside your GitHub Actions runner**:
 
-The engineering control plane turns a vague request into a verified result: idea -> spec -> contract -> context -> implementation -> evidence -> review. These commands have read-only or `--dry-run` paths that work fully offline with no LLM call required, so agents can inspect, route, and verify work before invoking a model.
+```yaml
+name: Memory OS Verification Gate
+on: [pull_request]
 
-| Command | What it does |
-|---|---|
-| `idea expand --text "..."` | Turn a rough idea into a structured discovery brief prompt |
-| `contract build <spec-id>` | Derive risk class, rollback plan, and acceptance criteria from an existing spec |
-| `context build --task "..."` | Build a targeted, reproducible context pack instead of dumping the repo into the model |
-| `evidence init/add-command/verify --task <id>` | Record commands run and exit codes, then block "done" until recorded checks passed |
-| `review-pack --task <id>` | Assemble contract, context pack, and evidence into one reviewer-facing document |
-| `change-size` | Warn when a change touches too many files or mixes source with generated artifacts |
-| `eval list/run/compare` | Run local-deterministic and optional LLM-judge eval suites for nondeterministic behavior |
-| `security scan --profile <profile>` | Scan local memory, private docs, context artifacts, or docs for secrets and injection markers |
-| `resources snapshot/checkpoint/compact` / `telemetry audit/prune` | Check and bound disk, SQLite WAL, JSONL, and telemetry growth |
-| `storage advise` | Recommend a storage tier (sqlite / local_postgres / cloud_postgres) from measured DB size, WAL growth, and swarm concurrency — advisory only, never migrates |
-| `release-check --target private/public` | Run deterministic local gates before publishing |
-| `route --task "..."` / `budget status` | Show provider/model routing and current token budget status without a network call |
-| `prompt list/show/render` | Inspect versioned, hashed prompt templates without an LLM call |
-| `adapters audit` | Check which optional adapters are installed; none are required by default |
-| `run start/status/complete` | Keep lightweight native run and checkpoint records for multi-step workflows |
-| `skills list/validate/sync` | Manage repo-local agent skills (`skills/<name>/SKILL.md`) and sync them into Codex/Claude/agy project directories |
-| `lora dataset build` / `lora script render --method sft\|dpo\|grpo` / `lora list` / `lora registry versions\|promote\|reject` | Build a TRL-ready dataset, render an Unsloth+TRL+PEFT training script for SFT (default, loss masked to assistant/tool-call tokens), DPO (chosen-vs-rejected ranking after an SFT pass), or GRPO (reward-driven, reward function stubbed as a TODO) — registers a new `candidate` adapter version. Offline, no GPU needed here; training runs on separate GPU hardware. See `src/memory_os/docs/encyclopedia/lora_training.md`. |
-| `agent run --task "..."` | Base-model action core: `Orchestrator` + `ActionBrain`/`Responder` + real executors against `MemorySearcher`/`LifecycleManager`. Works with any configured provider today (no trained action-LoRA needed to test the wiring); point `--model` at a trained adapter's Ollama tag later. See `src/memory_os/docs/encyclopedia/agent_brain.md`. |
-
-## How it works
-
-Memory lives in `memory/nodes.jsonl` and `memory/edges.jsonl` — plain text files you can read and edit.
-
-Agents write **task capsules** to `agent_context/task_capsules.jsonl` when they complete work. Running `memory_os compact` extracts structured memory nodes from those capsules via LLM. Running `memory_os sync` indexes them into SQLite FTS5 for fast search.
-
-For non-trivial development work, agents can run `memory_os spec init "<title>"` to create a plain-file feature workspace:
-
-```
-specs/001-example/
-    spec.md
-    plan.md
-    tasks.md
-    checklist.md
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: memory-os/memory-os@v0.2.0
+        with:
+          require-evidence: "true"
+          max-changed-files: "10"
+          sarif-file: "memory-os-security.sarif"
+          license-key: ${{ secrets.MEMORY_OS_LICENSE_KEY }}
 ```
 
-`memory_os spec analyze` checks for unresolved clarification markers, numbered requirements, acceptance scenarios, constitution checks, and task traceability.
+### Open-Core Tiers (Flat Pricing — No Per-Seat Tax)
 
-```
-agent completes task
-    → writes task_capsules.jsonl
-    → memory_os compact  (LLM extracts nodes)
-    → memory_os sync     (indexes to SQLite)
-    → memory_os search   (retrieves relevant context)
-```
+* **Core (`MIT` — Free forever):** Local CLI, `JSONL + SQLite FTS5`, `stdio` MCP, `spec`, `evidence`, `security scan`, local CI pass/fail gate.
+* **Pro Solo:** Native **SARIF 2.1.0** export to GitHub Security, local Web Graph UI, multi-repo search.
+* **Team CI Gate (Flat per org — unlimited committers):** Automated Markdown PR Verification Comments, custom blast-radius & policy enforcement, audit logs.
+* **Enterprise Offline:** Air-gapped signed license tokens (`LIC1.*`) for isolated VPC/EU runners.
 
-## Environment variables
-
-The base package has no mandatory third-party runtime dependencies. Provider SDKs
-and heavier tooling are installed through extras, for example:
+Manage licenses via CLI:
 
 ```bash
-pip install "memory_os[providers-ollama]"
-pip install "memory_os[providers-openai]"
-pip install "memory_os[resource-psutil]"
-pip install "memory_os[all]"
+memory-os license status
+memory-os license activate <YOUR_KEY>
 ```
 
-Create a `.env` in your project root:
+---
 
-```bash
-# No key needed: a local Ollama daemon (http://localhost:11434) is tried
-# first, automatically, using whatever model you've already pulled.
-GEMINI_API_KEY=...          # tried 2nd — free tier, large context window
-GROQ_API_KEY=gsk_...        # tried 3rd — free tier, fast inference
-OPENROUTER_API_KEY=...      # tried 4th — routes to the free-tier model pool
-OPENAI_API_KEY=sk-...       # tried last — paid fallback
-```
+## License
 
-`compact`/`compress`/`link-infer`/`giant-scan` try local Ollama first, then cloud
-providers in the order above, falling through whenever a key is missing, no
-local model is pulled, or a call fails — so a single configured key (or just
-a running Ollama) is enough to run LLM operations. For the cloud free tiers,
-the model name is *not* hardcoded: each call asks that provider's live
-`/models` endpoint what's currently free/available and picks from there, so
-the chain keeps working after a provider renames or retires a model. Use
-`--provider` on any of these commands to pin a single provider instead of
-falling through (`--provider ollama` to force local-only).
-
-LLM operations (`compact`, `compress`, `giant-scan`) require at least one key, or a local Ollama daemon with a model pulled.
-`init`, `validate`, `sync`, `search`, `review`, `approve`, `triage`, `query`, `backlinks`, `memory log`, `memory show`, `memory revert` work offline.
-
-`python3 test_auto.py` runs against an isolated temporary Memory OS workspace by default. Use `python3 test_auto.py --live-smoke` only when intentionally testing the current checkout's live runtime state.
-
-## Agent integration
-
-After `memory_os init`, add this to your `AGENTS.md` or `CLAUDE.md`:
-
-```markdown
-## Memory OS
-
-Run `memory_os search "<topic>"` before starting any task.
-For non-trivial feature work, run `memory_os spec init "<title>"` and keep spec/plan/tasks traceable.
-After completing a task, append a capsule to `agent_context/task_capsules.jsonl`.
-Run `memory_os sync` after any memory update.
-Run `memory_os check-updates` periodically to find the public repository URL.
-For public-facing work, use the public repository's normal issue/PR flow. Keep private planning files such as `DEV_STRATEGY.md` and `agent_context/IMPORTANT_PROPOSAL.md` on private remotes only.
-```
-
-## Templates
-
-Copy files from `templates/` into your project's `agent_context/`:
-
-- `templates/CONTEXT.md` — project context template
-- `templates/HANDSHAKE.md` — agent session handoff template  
-- `templates/WORKFLOWS.md` — 12-step task scale
-- `templates/CONSTITUTION.md` — development principles for Memory OS projects
-- `templates/specs/` — spec, plan, tasks, and checklist templates
-- `templates/SWARM_PROTOCOL.md` — multi-agent orchestration protocol
-- `templates/PROPOSALS.md` — how agents propose upstream changes (bugs, features, schema)
-- `templates/AGENT_RULES.md` — handshake verification and step-tier rules
-- `templates/scripts/` — LOCAL FIRST script scaffolds
-- `templates/skills/` — skill/rules templates and examples
-
-## Architecture
-
-See `src/memory_os/docs/ARCHITECTURE.md` for the full system design.
+Core repository is licensed under the **MIT License**. See [PRODUCT_BOUNDARY.md](PRODUCT_BOUNDARY.md) for the Open-Core boundary.

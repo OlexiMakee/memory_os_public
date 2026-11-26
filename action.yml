@@ -1,0 +1,148 @@
+name: "Memory OS Verification Gate"
+description: "100% local-runner deterministic Evidence Gate, Secret/Injection Scanner (SARIF 2.1.0), and Blast-Radius Check for AI-assisted PRs."
+author: "Memory OS"
+branding:
+  icon: "shield"
+  color: "green"
+
+inputs:
+  task-id:
+    description: "Evidence bundle task ID to verify (defaults to latest bundle in agent_context/evidence/)."
+    required: false
+    default: ""
+  require-evidence:
+    description: "Block merge if no verified command evidence bundle exists."
+    required: false
+    default: "true"
+  security-profile:
+    description: "Security scan profile (default, private-docs, context-artifacts, docs, all)."
+    required: false
+    default: "default"
+  max-changed-files:
+    description: "Optional hard cap on changed files per PR."
+    required: false
+    default: ""
+  sarif-file:
+    description: "Output path for SARIF 2.1.0 security report (Pro/Team license)."
+    required: false
+    default: "memory-os-security.sarif"
+  post-pr-comment:
+    description: "Post Markdown verification summary to the Pull Request (Team license)."
+    required: false
+    default: "true"
+  license-key:
+    description: "Optional Memory OS Pro/Team/Enterprise license key (pass via GitHub Secrets)."
+    required: false
+    default: ""
+  license-sandbox:
+    description: "Set to 'true' to allow SANDBOX-* test keys."
+    required: false
+    default: "false"
+  github-token:
+    description: "GitHub token for posting PR comments (defaults to GITHUB_TOKEN)."
+    required: false
+    default: ${{ github.token }}
+  python-version:
+    description: "Python version to run Memory OS."
+    required: false
+    default: "3.11"
+
+outputs:
+  verdict:
+    description: "Gate verdict: PASS or BLOCK."
+    value: ${{ steps.gate.outputs.verdict }}
+  sarif-file:
+    description: "Path to generated SARIF file (empty if not generated)."
+    value: ${{ steps.gate.outputs.sarif_file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Memory OS (local action package)
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        python -m pip install --quiet --no-cache-dir "$ACTION_PATH"
+
+    - name: Run Deterministic Verification Gate
+      id: gate
+      shell: bash
+      env:
+        MEMORY_OS_LICENSE_KEY: ${{ inputs.license-key }}
+        MEMORY_OS_LICENSE_SANDBOX: ${{ inputs.license-sandbox }}
+        INPUT_WORKSPACE: ${{ github.workspace }}
+        INPUT_TASK_ID: ${{ inputs.task-id }}
+        INPUT_REQUIRE_EVIDENCE: ${{ inputs.require-evidence }}
+        INPUT_SECURITY_PROFILE: ${{ inputs.security-profile }}
+        INPUT_MAX_CHANGED_FILES: ${{ inputs.max-changed-files }}
+        INPUT_SARIF_FILE: ${{ inputs.sarif-file }}
+        INPUT_POST_PR_COMMENT: ${{ inputs.post-pr-comment }}
+      run: |
+        ARGS=(--root "$INPUT_WORKSPACE" --security-profile "$INPUT_SECURITY_PROFILE")
+        if [ -n "$INPUT_TASK_ID" ]; then
+          ARGS+=(--task-id "$INPUT_TASK_ID")
+        fi
+        if [ "$INPUT_REQUIRE_EVIDENCE" != "true" ]; then
+          ARGS+=(--no-require-evidence)
+        fi
+        if [ -n "$INPUT_MAX_CHANGED_FILES" ]; then
+          ARGS+=(--max-changed-files "$INPUT_MAX_CHANGED_FILES")
+        fi
+        if [ -n "$INPUT_SARIF_FILE" ]; then
+          ARGS+=(--sarif-out "$INPUT_SARIF_FILE")
+        fi
+        COMMENT_FILE="${RUNNER_TEMP}/memory_os_pr_comment.md"
+        if [ "$INPUT_POST_PR_COMMENT" = "true" ]; then
+          ARGS+=(--pr-comment-out "$COMMENT_FILE")
+        fi
+
+        set +e
+        python -m memory_os.toolkit.ci_gate "${ARGS[@]}"
+        GATE_EXIT=$?
+        set -e
+
+        if [ "$GATE_EXIT" -eq 0 ]; then
+          echo "verdict=PASS" >> "$GITHUB_OUTPUT"
+        else
+          echo "verdict=BLOCK" >> "$GITHUB_OUTPUT"
+        fi
+        echo "gate_exit=${GATE_EXIT}" >> "$GITHUB_OUTPUT"
+        if [ -n "$INPUT_SARIF_FILE" ] && [ -f "$INPUT_SARIF_FILE" ]; then
+          echo "sarif_file=${INPUT_SARIF_FILE}" >> "$GITHUB_OUTPUT"
+        else
+          echo "sarif_file=" >> "$GITHUB_OUTPUT"
+        fi
+        if [ -f "$COMMENT_FILE" ]; then
+          echo "comment_file=${COMMENT_FILE}" >> "$GITHUB_OUTPUT"
+        else
+          echo "comment_file=" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Upload SARIF to GitHub Security
+      if: always() && steps.gate.outputs.sarif_file != ''
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.gate.outputs.sarif_file }}
+
+    - name: Post PR Verification Comment
+      if: always() && github.event_name == 'pull_request' && steps.gate.outputs.comment_file != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        COMMENT_FILE: ${{ steps.gate.outputs.comment_file }}
+      run: |
+        gh pr comment "$PR_NUMBER" --body-file "$COMMENT_FILE"
+
+    - name: Enforce Gate Verdict
+      shell: bash
+      env:
+        GATE_EXIT: ${{ steps.gate.outputs.gate_exit }}
+      run: |
+        exit "$GATE_EXIT"

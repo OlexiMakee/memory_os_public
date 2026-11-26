@@ -129,6 +129,34 @@ def write_graph(storage):
     assert "bad_writer.py:7" in check.detail
 
 
+def test_release_check_public_clean_room_passes_on_clean_tree(tmp_path):
+    config = make_release_root(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "memory_os"\n', encoding="utf-8")
+    (tmp_path / "README.md").write_text("# Memory OS\n", encoding="utf-8")
+
+    check = ReleaseChecker(config)._check_public_clean_room()
+
+    assert check.ok is True
+    assert check.name == "public-clean-room"
+
+
+def test_release_check_public_clean_room_flags_forbidden_paths_and_patterns(tmp_path):
+    config = make_release_root(tmp_path)
+    forbidden_mod = tmp_path / "src" / "memory_os" / "ide_grant_private.py"
+    forbidden_mod.parent.mkdir(parents=True)
+    forbidden_mod.write_text("# private\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        "# When used inside this host project — LLMClientFactory is resolved automatically.\n",
+        encoding="utf-8",
+    )
+
+    check = ReleaseChecker(config)._check_public_clean_room()
+
+    assert check.ok is False
+    assert "forbidden-path:src/memory_os/ide_grant_private.py" in check.detail
+    assert "clean-room-pattern:pyproject.toml" in check.detail
+
+
 def _ok_check(name: str):
     class Check:
         ok = True

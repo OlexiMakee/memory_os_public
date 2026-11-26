@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import List, Dict, Any, Optional
+from datetime import datetime, timezone
 
 class NodeType(str, Enum):
     RULE = "rule"
@@ -76,6 +77,17 @@ class MemoryNode:
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
+    def is_valid_at(self, timestamp_iso: Optional[str] = None) -> bool:
+        """Check if node is temporally valid at given ISO timestamp (default: now)."""
+        if not self.valid_from and not self.valid_until:
+            return True
+        now = timestamp_iso or datetime.now(timezone.utc).isoformat()
+        if self.valid_from and now < self.valid_from:
+            return False
+        if self.valid_until and now > self.valid_until:
+            return False
+        return True
+
 @dataclass
 class MemoryEdge:
     source: str
@@ -85,6 +97,8 @@ class MemoryEdge:
     confidence: float = 1.0
     evidence: List[str] = field(default_factory=list)
     reason: str = ""
+    valid_from: str = ""
+    valid_until: str = ""
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MemoryEdge":
@@ -96,10 +110,23 @@ class MemoryEdge:
             confidence=data.get("confidence", 1.0),
             evidence=data.get("evidence", []),
             reason=data.get("reason", ""),
+            valid_from=data.get("valid_from", ""),
+            valid_until=data.get("valid_until", ""),
         )
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    def is_valid_at(self, timestamp_iso: Optional[str] = None) -> bool:
+        """Check if edge is temporally valid at given ISO timestamp (default: now)."""
+        if not self.valid_from and not self.valid_until:
+            return True
+        now = timestamp_iso or datetime.now(timezone.utc).isoformat()
+        if self.valid_from and now < self.valid_from:
+            return False
+        if self.valid_until and now > self.valid_until:
+            return False
+        return True
 
 @dataclass
 class TaskCapsule:

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Set, Any, Optional
 from memory_os.core.adapters import CodebaseDomainAdapter, DomainAdapterRegistry
@@ -155,13 +156,20 @@ class MemorySearcher:
                               items_by_file: Dict[str, Dict[str, Any]]) -> Set[str]:
         return self.codebase_adapter.traverse_dependencies(start_files, depth, items_by_file)
 
-    def search_memory(self, query: str, depth: int = 1, semantic: bool = False) -> List[Dict[str, Any]]:
+    def search_memory(
+        self,
+        query: str,
+        depth: int = 1,
+        semantic: bool = False,
+        hybrid: bool = False,
+        all_time: bool = False,
+    ) -> List[Dict[str, Any]]:
         current_version = getattr(self.repository, "get_version_hash", lambda: "")()
         if current_version and current_version != self._cache_version:
             self._query_cache.clear()
             self._cache_version = current_version
             
-        cache_key = (query, depth, semantic)
+        cache_key = (query, depth, semantic, hybrid, all_time)
         if cache_key in self._query_cache:
             return self._query_cache[cache_key]
             
@@ -192,41 +200,34 @@ class MemorySearcher:
                 conf = 1.0
             return 0.5 + 0.5 * max(0.0, min(1.0, conf))
 
-        if not semantic:
+        # Helper for lexical search
+        def _run_lexical_search() -> Dict[str, float]:
+            res_scores = {}
             sqlite_results = []
             if getattr(self.repository, "indexer", None) and hasattr(self.repository.indexer, "search_graph_nodes"):
-                # Use Layered Retrieval via SQLite FTS5 (Phase 5)
-                # Remove characters that FTS5 considers syntax (e.g. quotes, brackets)
                 safe_query = re.sub(r'[^\w\s]', ' ', query).strip()
                 if safe_query:
-                    # FTS5 needs asterisk for prefix matching on the last word for better semantic feel
                     fts_query = " ".join([w for w in safe_query.split()])
                     if fts_query:
-                        # Append * to the last term for prefix matching if it doesn't end with a space
                         if not query.endswith(' '):
                             fts_query += '*'
                         sqlite_results = self.repository.indexer.search_graph_nodes(fts_query, limit=100)
-            
+
             if sqlite_results:
-                # We got fast indexed results from SQLite!
                 for res in sqlite_results:
                     nid = res["id"]
-                    matched_node_ids.add(nid)
-                    # Ensure stale/superseded/archived are downranked
                     score = res.get("search_score", 1.0)
                     if res.get("status") in ["stale", "superseded"]:
                         score *= 0.5
                     elif res.get("status") == "archived":
                         score *= 0.1
                     score *= _confidence_multiplier(nodes_by_id.get(nid, res))
-                    node_scores[nid] = score
+                    res_scores[nid] = score
             else:
-                # Fallback to pure Python fuzzy array scan
                 for node in nodes:
                     node_id = node.get("id")
                     if not node_id:
                         continue
-                    
                     score = 0.0
                     text_fields = [
                         str(node_id),
@@ -236,57 +237,122 @@ class MemorySearcher:
                         " ".join(str(tag) for tag in node.get("tags", []) or [])
                     ]
                     full_text = " ".join(text_fields).lower()
-                    
                     if query_lower in full_text:
                         score += VERBATIM_QUERY_SCORE
-                        
                     if query_tokens:
                         node_tokens = tokenize(full_text)
                         overlap = query_tokens.intersection(node_tokens)
                         if len(query_tokens) > 0:
                             score += (len(overlap) / len(query_tokens)) * 5.0
-                        
                     if score >= 1.5:
                         if node.get("status") in ["stale", "superseded"]:
                             score *= 0.5
                         elif node.get("status") == "archived":
                             score *= 0.1
                         score *= _confidence_multiplier(node)
-                        matched_node_ids.add(node_id)
-                        node_scores[node_id] = score
+                        res_scores[node_id] = score
+            return res_scores
 
-        # Semantic search mode: forced by --semantic OR acting as fallback when lexical search yields 0 matches
-        if semantic or not matched_node_ids:
+        # Helper for semantic search
+        def _run_semantic_search(force_embed: bool = False) -> Dict[str, float]:
+            sem_scores = {}
             try:
                 from memory_os.toolkit.embedding_provider import EmbeddingProvider, _cosine
                 provider = EmbeddingProvider(config=self.config)
-                
-                if semantic:
-                    # Forced semantic search: dynamically generate embeddings for new nodes
+                if force_embed:
                     vec_cache = provider.embed_nodes(nodes)
                 else:
-                    # Fallback semantic search: load existing cache only
                     vec_cache = provider._load_cache()
-                    
+                    # If cache empty or misses many nodes, compute dynamically
+                    if len(vec_cache) < len(nodes):
+                        vec_cache = provider.embed_nodes(nodes)
+
                 if len(vec_cache) >= 1:
                     q_vec = provider._embed(query)
                     if q_vec:
+                        if hybrid:
+                            threshold = 0.10
+                        elif semantic:
+                            threshold = getattr(self.config, "semantic_similarity_threshold", 0.6)
+                        else:
+                            threshold = getattr(self.config, "semantic_fallback_threshold", 0.15)
                         for node in nodes:
                             nid = node.get("id")
                             if nid and nid in vec_cache:
                                 sim = _cosine(q_vec, vec_cache[nid])
-                                threshold = (
-                                    self.config.semantic_similarity_threshold
-                                    if semantic
-                                    else self.config.semantic_fallback_threshold
-                                )
                                 if sim >= threshold:
-                                    matched_node_ids.add(nid)
-                                    # Scale to BM25 score range so ranking is consistent
-                                    node_scores[nid] = sim * 9.0 * _confidence_multiplier(node)
+                                    sem_scores[nid] = sim
             except Exception as _e:
                 import sys as _sys
-                print(f'Ignored exception: {_e}', file=_sys.stderr)  # embedding unavailable — stay with empty result
+                print(f'Ignored exception: {_e}', file=_sys.stderr)
+            return sem_scores
+
+        if hybrid:
+            # Hybrid Retrieval with Reciprocal Rank Fusion (RRF, Phase M0.2)
+            lexical_candidates = _run_lexical_search()
+            semantic_candidates = _run_semantic_search(force_embed=True)
+
+            lex_sorted = sorted(lexical_candidates.items(), key=lambda x: x[1], reverse=True)
+            sem_sorted = sorted(semantic_candidates.items(), key=lambda x: x[1], reverse=True)
+
+            lex_ranks = {nid: rank + 1 for rank, (nid, _) in enumerate(lex_sorted)}
+            sem_ranks = {nid: rank + 1 for rank, (nid, _) in enumerate(sem_sorted)}
+
+            all_cands = set(lex_ranks.keys()) | set(sem_ranks.keys())
+            for nid in all_cands:
+                rrf = 0.0
+                if nid in lex_ranks:
+                    rrf += 1.0 / (60.0 + lex_ranks[nid])
+                if nid in sem_ranks:
+                    rrf += 1.0 / (60.0 + sem_ranks[nid])
+
+                node = nodes_by_id.get(nid, {})
+                score = rrf * 100.0 * _confidence_multiplier(node)
+                matched_node_ids.add(nid)
+                node_scores[nid] = score
+                if nid in nodes_by_id:
+                    nodes_by_id[nid]["score_breakdown"] = {
+                        "rrf": round(rrf * 100.0, 3),
+                        "lex_rank": lex_ranks.get(nid),
+                        "sem_rank": sem_ranks.get(nid),
+                        "cosine_sim": round(semantic_candidates.get(nid, 0.0), 3),
+                    }
+        elif semantic:
+            # Forced semantic search
+            sem_scores = _run_semantic_search(force_embed=True)
+            for nid, sim in sem_scores.items():
+                matched_node_ids.add(nid)
+                node = nodes_by_id.get(nid, {})
+                node_scores[nid] = sim * 9.0 * _confidence_multiplier(node)
+        else:
+            # Default lexical search with semantic fallback if 0 matches
+            lex_scores = _run_lexical_search()
+            for nid, score in lex_scores.items():
+                matched_node_ids.add(nid)
+                node_scores[nid] = score
+
+            if not matched_node_ids:
+                sem_scores = _run_semantic_search(force_embed=False)
+                for nid, sim in sem_scores.items():
+                    matched_node_ids.add(nid)
+                    node = nodes_by_id.get(nid, {})
+                    node_scores[nid] = sim * 9.0 * _confidence_multiplier(node)
+
+        # Bi-Temporal validity checks (valid_from / valid_until)
+        if not all_time:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for nid in list(matched_node_ids):
+                node = nodes_by_id.get(nid, {})
+                v_until = node.get("valid_until", "")
+                if v_until and now_iso > v_until:
+                    # Expired fact downranked
+                    node_scores[nid] *= 0.1
+                    node["temporal_status"] = "expired"
+                v_from = node.get("valid_from", "")
+                if v_from and now_iso < v_from:
+                    # Future fact downranked
+                    node_scores[nid] *= 0.1
+                    node["temporal_status"] = "future"
 
         all_matched_node_ids = self.traverse_graph(matched_node_ids, depth, nodes_by_id, edges)
         matched_nodes = []
