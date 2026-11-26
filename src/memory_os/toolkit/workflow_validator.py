@@ -16,7 +16,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from memory_os.core.toml_compat import load_toml_path
-from memory_os.toolkit.quantizer import LEVEL_SCALE
+
+try:
+    from memory_os.toolkit.quantizer import LEVEL_SCALE
+except ImportError:  # Clean-room public build strips optional quantizer module
+    LEVEL_SCALE = {i: f"L{i}" for i in range(14)}
 
 UTC = timezone.utc
 
